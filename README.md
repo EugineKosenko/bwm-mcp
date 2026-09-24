@@ -35,14 +35,27 @@ higher-level `bitwarden-pm` facade crate was deliberately avoided too — it unc
 `bitwarden-importers` (`.kdbx` import support), which in turn depends on a version of the `keepass`
 crate whose `aes`/`cipher` requirements conflict with the rest of the dependency graph.
 
+The dependency actually points at
+[`EugineKosenko/sdk-internal`](https://github.com/EugineKosenko/sdk-internal) (branch
+`bwm-mcp-item-support`), a fork carrying three small, upstreamable fixes found while building this
+server: `ciphers` (vault items) had no `SyncHandler` at all, so nothing ever populated the local
+repository; `CipherCreateRequest` / `CipherEditRequest` were never re-exported past their private
+submodule despite the crate's own docs calling them public input DTOs; and a password login never
+called `init_user_id`, so anything reading it (`CiphersClient::create`) failed with
+`NotAuthenticatedError` even after a fully successful login. None of these are specific to this
+project — `folders` and `generate` worked against plain upstream.
+
 ## Tools
 
 This is an early, partial implementation — see the table below for what exists today. More tools
-(`items`, `move`, `edit_item_collections`, ...) are added opportunistically, one at a time.
+(`move`, `edit_item_collections`, ...) are added opportunistically, one at a time.
 
 - **folders** — `list` / `get` / `create` / `edit` on vault folders, one tool with an `action`
   argument. Folders carry no secret field, so there is no reason to gate reads and writes separately
   the way item tools eventually will.
+- **items** — `list` / `get` / `create` (`login` or `secureNote`) / `edit` (change `folderId`, `name`
+  or `notes` on an item by `id`, everything else — `login`, custom fields, attachments — preserved as
+  is). `card` / `identity` are not supported yet.
 - **generate** — a password or, with `passphrase: true`, a passphrase. Runs locally, no vault access or
   login required.
 
