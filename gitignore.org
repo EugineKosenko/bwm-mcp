@@ -1,0 +1,35 @@
+#+title: Ігнорування
+
+* Файл
+
+#+begin_src conf :noweb yes :mkdirp yes :tangle .gitignore
+  <<Визначення>>
+#+end_src
+
+* Збірка
+
+~/target~ лишається на випадок, якщо ~.cargo/config.toml~ (див. [[file:config.org][~config.org~]]) раптом не спрацює й
+збірка піде в типовий локальний каталог. Сам ~.cargo/~ — машинно-специфічний абсолютний шлях до
+спільного диска, тож теж у git не потрапляє.
+
+#+begin_src conf :noweb-ref Визначення
+  /target
+  /.cargo
+#+end_src
+
+* Резервні копії редакторів
+
+Узагальнений патерн, що охоплює й ~*.~undo-tree~~.
+
+#+begin_src conf :noweb-ref Визначення
+  *~
+#+end_src
+
+* Секрети
+
+Реальні значення лишаються в ~.env~, у сховище потрапляє лише ~.env.example~ (його породжує [[file:env.org][~env.org~]]).
+
+#+begin_src conf :noweb-ref Визначення
+  .env*
+  !.env.example
+#+end_src

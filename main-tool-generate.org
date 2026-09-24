@@ -1,0 +1,83 @@
+#+title: Інструмент generate
+
+Генератор паролів і passphrase — синхронний, працює без мережі й без входу в сейф (кожен виклик
+~PasswordManagerClient::generator()~ дешевий, сейфа не чіпає).
+
+* Модуль
+
+#+begin_src rust :noweb yes :mkdirp yes :tangle src/tools/generate.rs
+  <<Декларації>>
+
+  <<Визначення>>
+#+end_src
+
+* Аргументи
+
+#+begin_src rust :noweb-ref Декларації
+  use crate::tools::reply;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  fn flag(arguments: &serde_json::Value, name: &str) -> bool {
+      arguments[name].as_bool().unwrap_or(false)
+  }
+#+end_src
+
+* Пароль
+
+Без жодної з ~lowercase~ / ~uppercase~ / ~number~ / ~special~ генератор Bitwarden відмовляє — той
+самий принцип, що й у офіційному сервері. ~.generator()~ — метод трейта ~GeneratorClientsExt~ (крейт
+~bitwarden-generators~), не власний метод ~Client~, тож трейт має бути в області видимості.
+
+#+begin_src rust :noweb-ref Декларації
+  use crate::client;
+  use bitwarden_generators::{GeneratorClientsExt, PasswordGeneratorRequest};
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  fn password(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
+      let request = PasswordGeneratorRequest {
+          lowercase: flag(arguments, "lowercase"),
+          uppercase: flag(arguments, "uppercase"),
+          numbers: flag(arguments, "number"),
+          special: flag(arguments, "special"),
+          length: arguments["length"].as_u64().unwrap_or(16) as u8,
+          ..Default::default()
+      };
+
+      bw.generator().password(request).map_err(|error| error.to_string())
+  }
+#+end_src
+
+* Passphrase
+
+#+begin_src rust :noweb-ref Декларації
+  use bitwarden_generators::PassphraseGeneratorRequest;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  fn passphrase(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
+      let request = PassphraseGeneratorRequest {
+          num_words: arguments["words"].as_u64().unwrap_or(4) as u8,
+          word_separator: arguments["separator"].as_str().unwrap_or("-").to_string(),
+          capitalize: flag(arguments, "capitalize"),
+          include_number: flag(arguments, "number"),
+      };
+
+      bw.generator().passphrase(request).map_err(|error| error.to_string())
+  }
+#+end_src
+
+* Виклик
+
+#+begin_src rust :noweb-ref Визначення
+  pub fn run(bw: &client::Bw, arguments: &serde_json::Value) -> serde_json::Value {
+      let result = if flag(arguments, "passphrase") {
+          passphrase(bw, arguments)
+      } else {
+          password(bw, arguments)
+      };
+
+      reply(result)
+  }
+#+end_src

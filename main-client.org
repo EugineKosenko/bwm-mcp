@@ -1,0 +1,150 @@
+#+title: Вхід до Bitwarden/Vaultwarden
+
+Побудова клієнта та вхід у сейф, спільні для всіх інструментів (див. [[file:main-tools.org][~main-tools.org~]]): жоден
+інструмент не будує клієнт напряму. Тип — голий ~bitwarden_core::Client~, а не фасад ~bitwarden-pm~
+(той безумовно тягне ~keepass~ через ~bitwarden-importers~ — конфлікт версій, див.
+[[file:config.org][~config.org~]]): ~AuthClient~ / ~SyncClient~ / ~VaultClient~ / ~GeneratorClient~ підключаються до
+~Client~ окремими трейтами-розширеннями з відповідних підкрейтів (див.
+[[root:spcfctn/code/bitwarden-rust-sdk.md][bitwarden-rust-sdk.md]]).
+
+* Модуль
+
+#+begin_src rust :noweb yes :mkdirp yes :tangle src/client.rs
+  <<Декларації>>
+
+  <<Визначення>>
+#+end_src
+
+* Тип клієнта
+
+Псевдонім, а не голий ~bitwarden_core::Client~ по всьому коду — коротше й дає одне місце, де змінити
+тип, якщо колись знадобиться обгортка.
+
+#+begin_src rust :noweb-ref Декларації
+  use bitwarden_core::Client;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  pub type Bw = Client;
+#+end_src
+
+* Адреса сервера
+
+Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ до базової адреси — ~BWM_SERVER~ із ~.env~ не
+включає їх, див. [[file:env.org][~env.org~]].
+
+#+begin_src rust :noweb-ref Декларації
+  use bitwarden_core::ClientSettings;
+  use std::env;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  fn settings(server: &str) -> ClientSettings {
+      ClientSettings {
+          identity_url: format!("{}/identity", server),
+          api_url: format!("{}/api", server),
+          ..Default::default()
+      }
+  }
+#+end_src
+
+* Побудова клієнта
+
+~Client::new()~ за замовчуванням ставить ~NoopTokenHandler~, який панікує при спробі зберегти токени
+після успішного логіну (~"Cannot set tokens on NoopTokenHandler"~ — перевірено на практиці). Реальний
+~bw~ явно підключає ~PasswordManagerTokenHandler~ через ~ClientBuilder~ — повторюємо той самий шлях.
+
+#+begin_src rust :noweb-ref Декларації
+  use bitwarden_auth::token_management::PasswordManagerTokenHandler;
+  use bitwarden_core::ClientBuilder;
+  use std::sync::Arc;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  fn build(server: &str) -> Bw {
+      ClientBuilder::new()
+          .with_token_handler(Arc::new(PasswordManagerTokenHandler::default()))
+          .with_settings(settings(server))
+          .build()
+  }
+#+end_src
+
+* Вхід через майстер-пароль
+
+Обов'язкові змінні середовища — ~BWM_SERVER~, ~BWM_EMAIL~, ~BWM_PASSWD~ (усі з [[file:env.org][~env.org~]]). Відсутня
+змінна — помилка користувача (не внутрішній збій), тож просте повідомлення, без паніки.
+
+#+begin_src rust :noweb-ref Декларації
+  use bitwarden_core::auth::login::PasswordLoginRequest;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  fn required(name: &str) -> Result<String, String> {
+      env::var(name).map_err(|_| format!("Змінну середовища {} не задано (див. .env.example).", name))
+  }
+
+  async fn login(bw: &Bw, email: String, password: String) -> Result<(), String> {
+      let result = bw
+          .auth()
+          .login_password(&PasswordLoginRequest { email, password, two_factor: None })
+          .await
+          .map_err(|error| format!("Не вдалося увійти в Bitwarden: {}", error))?;
+
+      if result.two_factor.is_some() {
+          return Err("Акаунт вимагає двофакторну автентифікацію — bwm-mcp поки її не підтримує.".to_string());
+      }
+
+      Ok(())
+  }
+#+end_src
+
+* Синхронізація сейфа
+
+Без синхронізації локальний репозиторій порожній — жоден ~VaultClient~-виклик (~folders().list()~,
+~ciphers().list()~ тощо) нічого не поверне, навіть після успішного входу. ~.sync()~ — метод трейта
+~SyncClientExt~ (крейт ~bitwarden-sync~), не власний метод ~Client~, тож трейт має бути в області
+видимості. Самого ~sync()~ недостатньо: без явно зареєстрованого обробника (~register_sync_handler~)
+синхронізація забирає дані з сервера, але нікуди їх не записує локально — перевірено на практиці
+(~folders().list()~ повертав порожній перелік після "успішного" ~sync()~ без обробника). Реальний ~bw~
+реєструє обробник для кожної частини сейфа окремо; поки що реєструємо лише ~FolderSyncHandler~ —
+обробник для елементів (~ciphers~) додамо разом з інструментом ~items~.
+
+#+begin_src rust :noweb-ref Декларації
+  use bitwarden_core::FromClient;
+  use bitwarden_sync::{SyncClientExt, SyncRequest};
+  use bitwarden_vault::FolderSyncHandler;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  async fn sync(bw: &Bw) -> Result<(), String> {
+      let sync_client = bw.sync();
+      sync_client.register_sync_handler(Arc::new(FolderSyncHandler::from_client(bw)));
+
+      sync_client
+          .sync(SyncRequest { force: false, exclude_subdomains: None })
+          .await
+          .map_err(|error| format!("Не вдалося синхронізувати сейф: {}", error))?;
+
+      Ok(())
+  }
+#+end_src
+
+* Підключення
+
+Єдина точка входу для [[file:main.org][~main.org~]]: будує клієнт, входить, синхронізує — і повертає готовий до роботи
+~Bw~ чи зрозумілу причину невдачі.
+
+#+begin_src rust :noweb-ref Визначення
+  pub async fn connect() -> Result<Bw, String> {
+      let server = required("BWM_SERVER")?;
+      let email = required("BWM_EMAIL")?;
+      let password = required("BWM_PASSWD")?;
+
+      let bw = build(&server);
+
+      login(&bw, email, password).await?;
+      sync(&bw).await?;
+
+      Ok(bw)
+  }
+#+end_src

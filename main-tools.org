@@ -1,0 +1,120 @@
+#+title: Реєстр інструментів
+
+Кожен інструмент реалізовано в окремому самодостатньому org-файлі зі своїм ~run~ (напр.
+[[file:main-tool-folders.org][~folders~]]). Оскільки noweb-посилання не резолвяться між org-файлами, спільні для всіх інструментів
+частини — оголошення підмодуля, опис для ~tools/list~ і диспетчеризація виклику за назвою — зведені
+тут, в одному файлі. Перелік-ціль (усі інструменти офіційного ~@bitwarden/mcp-server~) — див.
+[[root:spcfctn/code/bitwarden-mcp-tools.md][bitwarden-mcp-tools.md]]; ця перша версія реалізує лише частину — теки й генератор, решту додаємо
+опортуністично, по одному інструменту за раз.
+
+* Модуль
+
+#+begin_src rust :noweb yes :mkdirp yes :tangle src/tools/mod.rs
+  <<Декларації>>
+
+  pub fn list() -> serde_json::Value {
+      serde_json::json!([
+          <<Tools:Опис>>
+      ])
+  }
+
+  pub async fn call(bw: &client::Bw, name: &str, arguments: &serde_json::Value) -> serde_json::Value {
+      match name {
+          <<Tools:Виклик>>
+      }
+  }
+
+  <<Визначення>>
+#+end_src
+
+* Відповідь інструмента
+
+Успіх і невдача передаються однаково — текстом, а ознака ~isError~ каже клієнтові, що саме це. Причина
+невдачі (елемент не знайдено, невірний аргумент) так доходить до моделі, а не губиться.
+
+#+begin_src rust :noweb-ref Декларації
+  use crate::client;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  pub fn reply(result: Result<String, String>) -> serde_json::Value {
+      match result {
+          Ok(text) => serde_json::json!({ "content": [{ "type": "text", "text": text }], "isError": false }),
+          Err(text) => serde_json::json!({ "content": [{ "type": "text", "text": text }], "isError": true }),
+      }
+  }
+#+end_src
+
+* Інструмент ~generate~
+
+Реалізація — в [[file:main-tool-generate.org][~main-tool-generate.org~]] (тангл таргета ~src/tools/generate.rs~). Єдиний інструмент, що
+не потребує сейфа взагалі (ні входу, ні синхронізації) — генератор працює локально.
+
+#+begin_src rust :noweb-ref Декларації
+  mod generate;
+#+end_src
+
+#+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Опис
+  {
+      "name": "generate",
+      "description": "Згенерувати надійний пароль чи passphrase. Без passphrase=true генерує пароль (потрібна хоча б одна з lowercase/uppercase/number/special); з passphrase=true — фразу зі слів.",
+      "inputSchema": {
+          "type": "object",
+          "properties": {
+              "passphrase": { "type": "boolean", "description": "Генерувати passphrase (фразу зі слів) замість пароля" },
+              "length": { "type": "integer", "minimum": 5, "description": "Довжина пароля (лише для пароля, не passphrase)" },
+              "lowercase": { "type": "boolean" },
+              "uppercase": { "type": "boolean" },
+              "number": { "type": "boolean" },
+              "special": { "type": "boolean" },
+              "words": { "type": "integer", "description": "Кількість слів passphrase (3–20)" },
+              "separator": { "type": "string", "description": "Роздільник слів passphrase" },
+              "capitalize": { "type": "boolean", "description": "Велика перша літера кожного слова passphrase" }
+          },
+          "additionalProperties": false
+      }
+  }
+#+end_src
+
+#+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Виклик
+  "generate" => generate::run(bw, arguments)
+#+end_src
+
+* Інструмент ~folders~
+
+Реалізація — в [[file:main-tool-folders.org][~main-tool-folders.org~]] (тангл таргета ~src/tools/folders.rs~). Одна дія (~list~ / ~get~ /
+~create~ / ~edit~) замість чотирьох окремих інструментів, як у офіційному сервері — теки не мають
+чутливого поля на кшталт пароля, тож немає причини розрізняти права доступу для читання й запису.
+
+#+begin_src rust :noweb-ref Декларації
+  mod folders;
+#+end_src
+
+#+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Опис
+  {
+      "name": "folders",
+      "description": "Робота з теками сейфа: list (усі теки), get (одна тека за id), create (нова тека, потрібне name), edit (перейменувати теку, потрібні id і name).",
+      "inputSchema": {
+          "type": "object",
+          "properties": {
+              "action": { "type": "string", "enum": ["list", "get", "create", "edit"] },
+              "id": { "type": "string", "description": "ID теки (для get/edit)" },
+              "name": { "type": "string", "description": "Назва теки (для create/edit)" }
+          },
+          "required": ["action"],
+          "additionalProperties": false
+      }
+  }
+#+end_src
+
+#+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Виклик
+  "folders" => folders::run(bw, arguments).await
+#+end_src
+
+* Невідомий інструмент
+
+Останній варіант у переліку, тому без коми після нього (~noweb-sep~ додає кому лише між елементами).
+
+#+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Виклик
+  _ => reply(Err(format!("Невідомий інструмент: {}", name)))
+#+end_src

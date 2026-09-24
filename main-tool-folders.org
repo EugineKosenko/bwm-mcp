@@ -1,0 +1,109 @@
+#+title: Інструмент folders
+
+Робота з теками сейфа через ~VaultClient::folders()~ (див. [[file:main-client.org][~main-client.org~]] і
+[[root:spcfctn/code/bitwarden-rust-sdk.md][bitwarden-rust-sdk.md]]). Чотири дії одним інструментом — теки не мають чутливого поля на кшталт
+пароля, тож немає причини розділяти права читання й запису так, як для елементів сейфа.
+
+* Модуль
+
+#+begin_src rust :noweb yes :mkdirp yes :tangle src/tools/folders.rs
+  <<Декларації>>
+
+  <<Визначення>>
+#+end_src
+
+* Аргументи
+
+#+begin_src rust :noweb-ref Декларації
+  use bitwarden_vault::FolderId;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  fn folder_id(arguments: &serde_json::Value) -> Result<FolderId, String> {
+      arguments["id"]
+          .as_str()
+          .ok_or("Потрібен аргумент id.".to_string())?
+          .parse()
+          .map_err(|_| "Некоректний id теки.".to_string())
+  }
+
+  fn folder_name(arguments: &serde_json::Value) -> Result<String, String> {
+      arguments["name"].as_str().map(|name| name.to_string()).ok_or("Потрібен аргумент name.".to_string())
+  }
+#+end_src
+
+* Перелік
+
+~.vault()~ — метод трейта ~VaultClientExt~ (крейт ~bitwarden-vault~), не власний метод ~Client~, тож
+трейт має бути в області видимості.
+
+#+begin_src rust :noweb-ref Декларації
+  use crate::client;
+  use bitwarden_vault::VaultClientExt;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  async fn list(bw: &client::Bw) -> Result<String, String> {
+      let folders = bw.vault().folders().list().await.map_err(|error| error.to_string())?;
+
+      Ok(serde_json::to_string(&folders).unwrap())
+  }
+#+end_src
+
+* Отримання однієї теки
+
+#+begin_src rust :noweb-ref Визначення
+  async fn get(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
+      let id = folder_id(arguments)?;
+      let folder = bw.vault().folders().get(id).await.map_err(|error| error.to_string())?;
+
+      Ok(serde_json::to_string(&folder).unwrap())
+  }
+#+end_src
+
+* Створення
+
+#+begin_src rust :noweb-ref Декларації
+  use bitwarden_vault::FolderAddEditRequest;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  async fn create(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
+      let name = folder_name(arguments)?;
+      let folder = bw.vault().folders().create(FolderAddEditRequest { name }).await.map_err(|error| error.to_string())?;
+
+      Ok(serde_json::to_string(&folder).unwrap())
+  }
+#+end_src
+
+* Перейменування
+
+#+begin_src rust :noweb-ref Визначення
+  async fn edit(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
+      let id = folder_id(arguments)?;
+      let name = folder_name(arguments)?;
+      let folder = bw.vault().folders().edit(id, FolderAddEditRequest { name }).await.map_err(|error| error.to_string())?;
+
+      Ok(serde_json::to_string(&folder).unwrap())
+  }
+#+end_src
+
+* Виклик
+
+#+begin_src rust :noweb-ref Декларації
+  use crate::tools::reply;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  pub async fn run(bw: &client::Bw, arguments: &serde_json::Value) -> serde_json::Value {
+      let result = match arguments["action"].as_str() {
+          Some("list") => list(bw).await,
+          Some("get") => get(bw, arguments).await,
+          Some("create") => create(bw, arguments).await,
+          Some("edit") => edit(bw, arguments).await,
+          _ => Err("Потрібен аргумент action: list/get/create/edit.".to_string()),
+      };
+
+      reply(result)
+  }
+#+end_src

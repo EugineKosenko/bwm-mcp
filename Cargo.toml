@@ -1,0 +1,14 @@
+[package]
+name = "bwm-mcp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dotenvy = "*"
+serde_json = "*"
+tokio = { version = "*", features = ["macros", "rt-multi-thread", "io-std", "io-util"] }
+bitwarden-core = { git = "https://github.com/bitwarden/sdk-internal", rev = "b4609d72308a5eb76e457b7f581828104d6d3b14", features = ["internal"] }
+bitwarden-vault = { git = "https://github.com/bitwarden/sdk-internal", rev = "b4609d72308a5eb76e457b7f581828104d6d3b14" }
+bitwarden-auth = { git = "https://github.com/bitwarden/sdk-internal", rev = "b4609d72308a5eb76e457b7f581828104d6d3b14" }
+bitwarden-sync = { git = "https://github.com/bitwarden/sdk-internal", rev = "b4609d72308a5eb76e457b7f581828104d6d3b14" }
+bitwarden-generators = { git = "https://github.com/bitwarden/sdk-internal", rev = "b4609d72308a5eb76e457b7f581828104d6d3b14" }
