@@ -4,8 +4,7 @@
 інструмент не будує клієнт напряму. Тип — голий ~bitwarden_core::Client~, а не фасад ~bitwarden-pm~
 (той безумовно тягне ~keepass~ через ~bitwarden-importers~ — конфлікт версій, див.
 [[file:config.org][~config.org~]]): ~AuthClient~ / ~SyncClient~ / ~VaultClient~ / ~GeneratorClient~ підключаються до
-~Client~ окремими трейтами-розширеннями з відповідних підкрейтів (див.
-[[root:spcfctn/code/bitwarden-rust-sdk.md][bitwarden-rust-sdk.md]]).
+~Client~ окремими трейтами-розширеннями з відповідних підкрейтів.
 
 * Модуль
 

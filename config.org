@@ -2,14 +2,14 @@
 
 Компонент проєкту називається ~bwm-mcp~ (код проєкту ~bwm~ і назва компонента ~mcp~), а крейт —
 ~bwm-mcp~. Сервер не використовує жодного стороннього крейта для самого протоколу =mcp=: =json-rpc=
-реалізовано напряму, як у ~am-mcp~ / ~fm-mcp~, див. [[file:main.org][~main.org~]]. Шифрування й робота з сейфом —
-через офіційні (хоч і позначені "internal, do not use") =Rust= підкрейти ~sdk-internal~ —
-обґрунтування й дослідження у [[root:spcfctn/code/bitwarden-rust-sdk.md][bitwarden-rust-sdk.md]]. Готовий фасад ~bitwarden-pm~ (усе одним
-крейтом) свідомо не використано: він безумовно тягне ~bitwarden-importers~ / ~bitwarden-exporters~ /
-~bitwarden-send~ тощо, непотрібні нам, а ~bitwarden-importers~ додатково тягне ~keepass~, чия конкретна
-дозволена версія (~<0.14~ за вимогою самого ~sdk-internal~) конфліктує версіями ~aes~ / ~cipher~ з
-рештою графу. Замість фасаду — прямі підкрейти: ~bitwarden-core~ (з фічею ~internal~), ~bitwarden-vault~,
-~bitwarden-auth~, ~bitwarden-sync~, ~bitwarden-generators~ — жоден із них ~keepass~ не чіпає.
+реалізовано напряму, як у ~am-mcp~ / ~fm-mcp~, див. [[file:main.org][~main.org~]]. Шифрування й робота з сейфом — через
+офіційні (хоч і позначені "internal, do not use") =Rust= підкрейти ~sdk-internal~. Готовий фасад
+~bitwarden-pm~ (усе одним крейтом) свідомо не використано: він безумовно тягне ~bitwarden-importers~ /
+~bitwarden-exporters~ / ~bitwarden-send~ тощо, непотрібні нам, а ~bitwarden-importers~ додатково тягне
+~keepass~, чия конкретна дозволена версія (~<0.14~ за вимогою самого ~sdk-internal~) конфліктує версіями
+~aes~ / ~cipher~ з рештою графу. Замість фасаду — прямі підкрейти: ~bitwarden-core~ (з фічею ~internal~),
+~bitwarden-vault~, ~bitwarden-auth~, ~bitwarden-sync~, ~bitwarden-generators~ — жоден із них ~keepass~ не
+чіпає.
 
 * =Cargo=
 
