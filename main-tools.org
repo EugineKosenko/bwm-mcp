@@ -111,6 +111,37 @@
   "folders" => folders::run(bw, arguments).await
 #+end_src
 
+* Інструмент ~items~
+
+Реалізація — в [[file:main-tool-items.org][~main-tool-items.org~]] (тангл таргета ~src/tools/items.rs~). Код компілюється, але
+жодна дія зараз не працює на практиці — дві незалежні прогалини самого ~sdk-internal~ (немає
+~SyncHandler~ для ~ciphers~, немає реекспорту типів запиту), не помилка нашого коду. Див.
+[[file:main-tool-items.org::*Чому нічого не працює (поки що)][пояснення там]].
+
+#+begin_src rust :noweb-ref Декларації
+  mod items;
+#+end_src
+
+#+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Опис
+  {
+      "name": "items",
+      "description": "Робота з елементами сейфа: list (усі елементи) і get (повний обʼєкт за id). ВІДОМЕ ОБМЕЖЕННЯ: обидві дії зараз завжди повертають порожньо/не знайдено — у sdk-internal ще немає синхронізації елементів сейфа в локальний репозиторій (є лише для folders/sends). create/edit не реалізовано взагалі (окрема прогалина — типи запиту не експортовані з крейта).",
+      "inputSchema": {
+          "type": "object",
+          "properties": {
+              "action": { "type": "string", "enum": ["list", "get"] },
+              "id": { "type": "string", "description": "ID елемента (для get)" }
+          },
+          "required": ["action"],
+          "additionalProperties": false
+      }
+  }
+#+end_src
+
+#+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Виклик
+  "items" => items::run(bw, arguments).await
+#+end_src
+
 * Невідомий інструмент
 
 Останній варіант у переліку, тому без коми після нього (~noweb-sep~ додає кому лише між елементами).

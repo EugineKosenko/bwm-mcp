@@ -1,0 +1,127 @@
+#+title: Інструмент items
+
+Робота з елементами сейфа (~ciphers~) через ~VaultClient::ciphers()~ (див. [[file:main-client.org][~main-client.org~]]). Код нижче
+правильний і компілюється, але *жодна дія* (~list~ / ~get~ / ~create~ / ~edit~) поки не працює на
+практиці — усі чотири впираються в прогалини самого ~sdk-internal~ на цьому ~rev~, не в помилку
+нашого коду. Див. [[*Чому нічого не працює (поки що)][розділ нижче]] — там повне пояснення і варіанти виходу.
+
+* Модуль
+
+#+begin_src rust :noweb yes :mkdirp yes :tangle src/tools/items.rs
+  <<Декларації>>
+
+  <<Визначення>>
+#+end_src
+
+* Аргументи
+
+~id~ у ~ciphers().get()~ — просто рядок (на відміну від ~folders().get()~, яка хоче ~FolderId~), тож
+парсити нема чого.
+
+#+begin_src rust :noweb-ref Визначення
+  fn item_id(arguments: &serde_json::Value) -> Result<String, String> {
+      arguments["id"].as_str().map(|id| id.to_string()).ok_or("Потрібен аргумент id.".to_string())
+  }
+#+end_src
+
+* Отримання
+
+#+begin_src rust :noweb-ref Декларації
+  use crate::client;
+  use bitwarden_vault::VaultClientExt;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  async fn get(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
+      let id = item_id(arguments)?;
+      let view = bw.vault().ciphers().get(&id).await.map_err(|error| error.to_string())?;
+
+      Ok(serde_json::to_string(&view).unwrap())
+  }
+#+end_src
+
+* Перелік
+
+Повертає лише успішно розшифровані елементи (~successes~); елементи, які не вдалось розшифрувати
+(~failures~, зашифрованими), мовчки пропускаємо — для першої версії достатньо. На практиці зараз
+завжди повертає порожній перелік (0 елементів на реальному сейфі з 274 картками) — причина в
+[[*Чому нічого не працює (поки що)][розділі нижче]], не тут.
+
+#+begin_src rust :noweb-ref Визначення
+  async fn list(bw: &client::Bw) -> Result<String, String> {
+      let result = bw.vault().ciphers().list().await.map_err(|error| error.to_string())?;
+
+      Ok(serde_json::to_string(&result.successes).unwrap())
+  }
+#+end_src
+
+* Чому нічого не працює (поки що)
+
+Дві незалежні прогалини самого ~sdk-internal~ на пінованому ~rev~ (перевірено на живому коді,
+2026-09-24), не помилки нашого коду.
+
+** Немає SyncHandler для ciphers — list/get завжди порожні
+
+~folders~ (і ~sends~) синхронізуються в локальний репозиторій через зареєстрований ~SyncHandler~
+(~FolderSyncHandler~, див. [[file:main-client.org][~main-client.org~]]). Для ~ciphers~ такого обробника в усьому
+~sdk-internal~ немає жодного — повний пошук по репозиторію (~impl SyncHandler~) дає рівно три
+результати: ~FolderSyncHandler~, ~SendSyncHandler~, ~CryptoSyncHandler~. Навіть внутрішній
+WASM-клієнт (~crates/bitwarden-wasm-internal/src/client.rs~, той самий, яким користується браузерне
+розширення) не реєструє нічого для ~ciphers~. Тип ~Repository<Cipher>~ існує
+(~bitwarden_state::register_repository_item!~ у ~cipher/cipher.rs~), просто зараз нічого його не
+наповнює — міграція елементів сейфа на цей SDK, схоже, ще не дійшла до синхронізації. Тому
+~ciphers().list()~ / ~get()~ (обидва читають той самий локальний репозиторій) завжди повертають
+порожньо/не знайдено, незалежно від реального вмісту сейфа.
+
+** Немає реекспорту типів запиту — create/edit не компілюються без нього
+
+~CiphersClient::create()~ / ~edit()~ (і навіть вужчий ~edit_partial()~ — саме для зміни ~folderId~ /
+~favorite~ без повного доступу) технічно існують, але їхні типи запиту — ~CipherCreateRequest~ /
+~CipherEditRequest~ / ~CipherPartialEditRequest~ — *не* реекспортовані з кореня крейта
+~bitwarden-vault~ (~cipher/mod.rs~ реекспортує з ~cipher_client~ лише ~CiphersClient~ /
+~GetAssignedOrgCiphersAdminError~ / ~should_use_blob_encryption~, а самі модулі ~create~ / ~edit~
+всередині ~cipher_client~ — приватні, без жодного мосту назовні). Це розходиться з власним
+~README.md~ модуля (~crates/bitwarden-vault/src/cipher/README.md~), що прямо називає ці типи "Public
+input DTOs" — отже, найімовірніше, забутий реекспорт, а не свідоме рішення. Не унікально для нас: сам
+~bw~ CLI (~crates/bw/src/command/create.rs~, той самий комміт) має буквально
+~unimplemented!("Create item not implemented yet")~ для команди ~create item~, а ~List~ / ~Edit~ у
+~crates/bw/src/main.rs~ — просто ~todo!()~.
+
+** Варіанти виходу
+
+Жоден не обраний мовчки — рішення користувача. Перша прогалина (sync) блокує геть усе, тож форк
+(варіант 1) — по суті єдиний шлях до *реально* робочого ~items~ найближчим часом, а не лише до
+компільованого коду.
+
+1. Форкнути ~sdk-internal~ (за зразком форку ~cci-core~, конвенція ~cmpnnts.md~): додати
+   ~CipherSyncHandler~ (за зразком наявного ~FolderSyncHandler~) і реекспорт
+   ~CipherCreateRequest~ / ~CipherEditRequest~ в ~cipher/mod.rs~. Найбільший обсяг роботи з трьох
+   варіантів, але єдиний, що реально розблоковує все чотири дії.
+2. Почекати, доки апстрім сам домалює міграцію ciphers (синхронізацію) — невідомо, наскільки
+   близько; поки що жодна дія ~items~ не працюватиме, компонент лишається неповним.
+3. Обійти через низькорівневі типи ~bitwarden-api-api~ напряму — вимагає самостійно повторити
+   синхронізацію й шифрування, які SDK мав робити сам. Не рекомендовано: саме цей ризик ми й хотіли
+   виключити, обираючи офіційний SDK замість власної реалізації.
+
+* Виклик
+
+~create~ / ~edit~ повертають зрозумілу помилку (не панікують і не мовчать), доки вибір із розділу
+вище не зроблено.
+
+#+begin_src rust :noweb-ref Декларації
+  use crate::tools::reply;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  pub async fn run(bw: &client::Bw, arguments: &serde_json::Value) -> serde_json::Value {
+      let result = match arguments["action"].as_str() {
+          Some("list") => list(bw).await,
+          Some("get") => get(bw, arguments).await,
+          Some("create") | Some("edit") =>
+              Err("items create/edit поки не реалізовано — див. main-tool-items.org.".to_string()),
+          _ => Err("Потрібен аргумент action: list/get.".to_string()),
+      };
+
+      reply(result)
+  }
+#+end_src

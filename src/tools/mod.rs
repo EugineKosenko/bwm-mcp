@@ -1,6 +1,7 @@
 use crate::client;
 mod generate;
 mod folders;
+mod items;
 
 pub fn list() -> serde_json::Value {
     serde_json::json!([
@@ -36,6 +37,19 @@ pub fn list() -> serde_json::Value {
                 "required": ["action"],
                 "additionalProperties": false
             }
+        },
+        {
+            "name": "items",
+            "description": "Робота з елементами сейфа: list (усі елементи) і get (повний обʼєкт за id). ВІДОМЕ ОБМЕЖЕННЯ: обидві дії зараз завжди повертають порожньо/не знайдено — у sdk-internal ще немає синхронізації елементів сейфа в локальний репозиторій (є лише для folders/sends). create/edit не реалізовано взагалі (окрема прогалина — типи запиту не експортовані з крейта).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["list", "get"] },
+                    "id": { "type": "string", "description": "ID елемента (для get)" }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -44,6 +58,7 @@ pub async fn call(bw: &client::Bw, name: &str, arguments: &serde_json::Value) ->
     match name {
         "generate" => generate::run(bw, arguments),
         "folders" => folders::run(bw, arguments).await,
+        "items" => items::run(bw, arguments).await,
         _ => reply(Err(format!("Невідомий інструмент: {}", name)))
     }
 }
