@@ -7,8 +7,8 @@ edition = "2021"
 dotenvy = "*"
 serde_json = "*"
 tokio = { version = "*", features = ["macros", "rt-multi-thread", "io-std", "io-util"] }
-bitwarden-core = { git = "https://github.com/bitwarden/sdk-internal", rev = "b4609d72308a5eb76e457b7f581828104d6d3b14", features = ["internal"] }
-bitwarden-vault = { git = "https://github.com/bitwarden/sdk-internal", rev = "b4609d72308a5eb76e457b7f581828104d6d3b14" }
-bitwarden-auth = { git = "https://github.com/bitwarden/sdk-internal", rev = "b4609d72308a5eb76e457b7f581828104d6d3b14" }
-bitwarden-sync = { git = "https://github.com/bitwarden/sdk-internal", rev = "b4609d72308a5eb76e457b7f581828104d6d3b14" }
-bitwarden-generators = { git = "https://github.com/bitwarden/sdk-internal", rev = "b4609d72308a5eb76e457b7f581828104d6d3b14" }
+bitwarden-core = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010", features = ["internal"] }
+bitwarden-vault = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
+bitwarden-auth = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
+bitwarden-sync = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
+bitwarden-generators = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use bitwarden_core::auth::login::PasswordLoginRequest;
 use bitwarden_core::FromClient;
 use bitwarden_sync::{SyncClientExt, SyncRequest};
-use bitwarden_vault::FolderSyncHandler;
+use bitwarden_vault::{CipherSyncHandler, FolderSyncHandler};
 
 pub type Bw = Client;
 fn settings(server: &str) -> ClientSettings {
@@ -43,6 +43,7 @@ async fn login(bw: &Bw, email: String, password: String) -> Result<(), String> {
 async fn sync(bw: &Bw) -> Result<(), String> {
     let sync_client = bw.sync();
     sync_client.register_sync_handler(Arc::new(FolderSyncHandler::from_client(bw)));
+    sync_client.register_sync_handler(Arc::new(CipherSyncHandler::from_client(bw)));
 
     sync_client
         .sync(SyncRequest { force: false, exclude_subdomains: None })

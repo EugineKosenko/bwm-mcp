@@ -63,16 +63,31 @@
 саме ~0.7.5~ підняла свою вимогу до ~hybrid-array ^0.4.12~, чий ~typenum ^1.20~ прямо конфліктує з
 обмеженням ~bitwarden-crypto~ — незадовольнюваний конфлікт версій, не залежний від нашого
 ~Cargo.toml~. На гілці ~main~ це вже виправлено (~typenum <1.21.0~), просто новий тег ще не випущено.
-Тому пінимо конкретний коміт ~main~ через ~rev~ (не саму гілку — та рухається, а ~rev~ так само
-відтворюваний, як тег, просто без назви). Усі підкрейти нижче — той самий ~rev~, бо мають
-узгоджуватися між собою в межах одного знімка ~workspace~.
+
+Залежність — на власний форк ~EugineKosenko/sdk-internal~ (гілка ~bwm-mcp-item-support~), не на
+апстрім: там додано три точкові виправлення, знайдені при написанні цього компонента.
+1. ~CipherSyncHandler~ — апстрім не синхронізує ~ciphers~ в локальний репозиторій узагалі (жоден
+   ~SyncHandler~ для них не існує, на відміну від ~folders~ / ~sends~).
+2. Реекспорт ~CipherCreateRequest~ / ~CipherEditRequest~ / ~CipherPartialEditRequest~ — в апстрімі
+   приватні, всупереч власному ~README.md~ крейта, що прямо називає їх "Public input DTOs".
+3. ~login_password()~ ніколи не викликає ~init_user_id()~ — після успішного входу
+   ~Client::internal::get_user_id()~ лишався ~None~, тож ~CiphersClient::create()~ (яка його читає)
+   падала з ~NotAuthenticatedError~ навіть при робочому вході й сейфі (~list~ / ~get~ це не зачіпало —
+   вони ~user_id~ не читають). Виводимо ~user_id~ із ~sub~-клейма самого access-токена
+   (~JwtToken~, уже публічний із ~bitwarden_core::auth~).
+
+Форк — точкові коміти поверх того самого ~rev~ апстріму, на якому вже стояли до цього. Усі підкрейти
+нижче — той самий форк і той самий ~rev~, бо мають узгоджуватися між собою в межах одного знімка
+~workspace~ (і, найважливіше, щоб тип ~bitwarden_core::Client~ був рівно один на весь граф
+залежностей — точковий пін лише ~bitwarden-vault~ на форк дав би два різні несумісні типи ~Client~ з
+різних джерел).
 
 #+begin_src toml :noweb-ref Залежності
-  bitwarden-core = { git = "https://github.com/bitwarden/sdk-internal", rev = "b4609d72308a5eb76e457b7f581828104d6d3b14", features = ["internal"] }
-  bitwarden-vault = { git = "https://github.com/bitwarden/sdk-internal", rev = "b4609d72308a5eb76e457b7f581828104d6d3b14" }
-  bitwarden-auth = { git = "https://github.com/bitwarden/sdk-internal", rev = "b4609d72308a5eb76e457b7f581828104d6d3b14" }
-  bitwarden-sync = { git = "https://github.com/bitwarden/sdk-internal", rev = "b4609d72308a5eb76e457b7f581828104d6d3b14" }
-  bitwarden-generators = { git = "https://github.com/bitwarden/sdk-internal", rev = "b4609d72308a5eb76e457b7f581828104d6d3b14" }
+  bitwarden-core = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010", features = ["internal"] }
+  bitwarden-vault = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
+  bitwarden-auth = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
+  bitwarden-sync = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
+  bitwarden-generators = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
 #+end_src
 
 * Спільний диск для ~target/~
@@ -85,5 +100,6 @@
   [build]
   target-dir = "/var/ftp/cache/rust/target-sdd/bw-mcp/bwm-mcp"
 #+end_src
+
 
 

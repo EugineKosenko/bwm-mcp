@@ -104,20 +104,21 @@ Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ д�
 ~SyncClientExt~ (крейт ~bitwarden-sync~), не власний метод ~Client~, тож трейт має бути в області
 видимості. Самого ~sync()~ недостатньо: без явно зареєстрованого обробника (~register_sync_handler~)
 синхронізація забирає дані з сервера, але нікуди їх не записує локально — перевірено на практиці
-(~folders().list()~ повертав порожній перелік після "успішного" ~sync()~ без обробника). Реальний ~bw~
-реєструє обробник для кожної частини сейфа окремо; поки що реєструємо лише ~FolderSyncHandler~ —
-обробник для елементів (~ciphers~) додамо разом з інструментом ~items~.
+(~folders().list()~ повертав порожній перелік після "успішного" ~sync()~ без обробника). Обробника для
+~ciphers~ в апстрімі ~sdk-internal~ не існує взагалі — ~CipherSyncHandler~ додано у власному форку
+(див. [[file:config.org][~config.org~]]) за зразком наявного ~FolderSyncHandler~.
 
 #+begin_src rust :noweb-ref Декларації
   use bitwarden_core::FromClient;
   use bitwarden_sync::{SyncClientExt, SyncRequest};
-  use bitwarden_vault::FolderSyncHandler;
+  use bitwarden_vault::{CipherSyncHandler, FolderSyncHandler};
 #+end_src
 
 #+begin_src rust :noweb-ref Визначення
   async fn sync(bw: &Bw) -> Result<(), String> {
       let sync_client = bw.sync();
       sync_client.register_sync_handler(Arc::new(FolderSyncHandler::from_client(bw)));
+      sync_client.register_sync_handler(Arc::new(CipherSyncHandler::from_client(bw)));
 
       sync_client
           .sync(SyncRequest { force: false, exclude_subdomains: None })

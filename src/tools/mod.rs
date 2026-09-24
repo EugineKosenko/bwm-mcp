@@ -40,12 +40,35 @@ pub fn list() -> serde_json::Value {
         },
         {
             "name": "items",
-            "description": "Робота з елементами сейфа: list (усі елементи) і get (повний обʼєкт за id). ВІДОМЕ ОБМЕЖЕННЯ: обидві дії зараз завжди повертають порожньо/не знайдено — у sdk-internal ще немає синхронізації елементів сейфа в локальний репозиторій (є лише для folders/sends). create/edit не реалізовано взагалі (окрема прогалина — типи запиту не експортовані з крейта).",
+            "description": "Робота з елементами сейфа: list (усі елементи), get (повний обʼєкт за id), create (login чи secureNote, потрібні name і type), edit (змінити folderId/name/notes елемента за id, зберігши решту полів — login, fields тощо — без змін).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["list", "get"] },
-                    "id": { "type": "string", "description": "ID елемента (для get)" }
+                    "action": { "type": "string", "enum": ["list", "get", "create", "edit"] },
+                    "id": { "type": "string", "description": "ID елемента (для get/edit)" },
+                    "type": { "type": "integer", "enum": [1, 2], "description": "1 — login, 2 — secureNote (для create)" },
+                    "name": { "type": "string", "description": "Назва (для create/edit)" },
+                    "notes": { "type": "string", "description": "Нотатки (для create/edit)" },
+                    "folderId": { "type": "string", "description": "Тека (для create/edit)" },
+                    "login": {
+                        "type": "object",
+                        "description": "Дані для type=1 (login)",
+                        "properties": {
+                            "username": { "type": "string" },
+                            "password": { "type": "string" },
+                            "totp": { "type": "string" },
+                            "uris": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "uri": { "type": "string" },
+                                        "match": { "type": "integer", "enum": [0, 1, 2, 3, 4, 5], "description": "0 Domain, 1 Host, 2 StartsWith, 3 Exact, 4 RegularExpression, 5 Never" }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 },
                 "required": ["action"],
                 "additionalProperties": false

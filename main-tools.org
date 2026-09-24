@@ -113,10 +113,8 @@
 
 * Інструмент ~items~
 
-Реалізація — в [[file:main-tool-items.org][~main-tool-items.org~]] (тангл таргета ~src/tools/items.rs~). Код компілюється, але
-жодна дія зараз не працює на практиці — дві незалежні прогалини самого ~sdk-internal~ (немає
-~SyncHandler~ для ~ciphers~, немає реекспорту типів запиту), не помилка нашого коду. Див.
-[[file:main-tool-items.org::*Чому нічого не працює (поки що)][пояснення там]].
+Реалізація — в [[file:main-tool-items.org][~main-tool-items.org~]] (тангл таргета ~src/tools/items.rs~). Залежить від власного форку
+~sdk-internal~ (див. [[file:config.org][~config.org~]]) — на апстрімі жодна з чотирьох дій не спрацювала б.
 
 #+begin_src rust :noweb-ref Декларації
   mod items;
@@ -125,12 +123,35 @@
 #+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Опис
   {
       "name": "items",
-      "description": "Робота з елементами сейфа: list (усі елементи) і get (повний обʼєкт за id). ВІДОМЕ ОБМЕЖЕННЯ: обидві дії зараз завжди повертають порожньо/не знайдено — у sdk-internal ще немає синхронізації елементів сейфа в локальний репозиторій (є лише для folders/sends). create/edit не реалізовано взагалі (окрема прогалина — типи запиту не експортовані з крейта).",
+      "description": "Робота з елементами сейфа: list (усі елементи), get (повний обʼєкт за id), create (login чи secureNote, потрібні name і type), edit (змінити folderId/name/notes елемента за id, зберігши решту полів — login, fields тощо — без змін).",
       "inputSchema": {
           "type": "object",
           "properties": {
-              "action": { "type": "string", "enum": ["list", "get"] },
-              "id": { "type": "string", "description": "ID елемента (для get)" }
+              "action": { "type": "string", "enum": ["list", "get", "create", "edit"] },
+              "id": { "type": "string", "description": "ID елемента (для get/edit)" },
+              "type": { "type": "integer", "enum": [1, 2], "description": "1 — login, 2 — secureNote (для create)" },
+              "name": { "type": "string", "description": "Назва (для create/edit)" },
+              "notes": { "type": "string", "description": "Нотатки (для create/edit)" },
+              "folderId": { "type": "string", "description": "Тека (для create/edit)" },
+              "login": {
+                  "type": "object",
+                  "description": "Дані для type=1 (login)",
+                  "properties": {
+                      "username": { "type": "string" },
+                      "password": { "type": "string" },
+                      "totp": { "type": "string" },
+                      "uris": {
+                          "type": "array",
+                          "items": {
+                              "type": "object",
+                              "properties": {
+                                  "uri": { "type": "string" },
+                                  "match": { "type": "integer", "enum": [0, 1, 2, 3, 4, 5], "description": "0 Domain, 1 Host, 2 StartsWith, 3 Exact, 4 RegularExpression, 5 Never" }
+                              }
+                          }
+                      }
+                  }
+              }
           },
           "required": ["action"],
           "additionalProperties": false
