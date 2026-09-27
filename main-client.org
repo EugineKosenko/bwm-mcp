@@ -68,6 +68,31 @@ Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ д�
   }
 #+end_src
 
+* Повний ланцюг помилки
+
+Деякі помилки крейтів ~sdk-internal~ (напр. ~reqwest-middleware::Error::Builder~) мають короткий
+~Display~ верхнього рівня ("builder error") без самої причини — вона лежить у ~source()~. Тому
+повідомлення користувачу збираємо, розгортаючи весь ланцюг ~source()~, а не лише перший рівень.
+
+#+begin_src rust :noweb-ref Декларації
+  use std::error::Error as StdError;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  fn describe(error: &(dyn StdError + 'static)) -> String {
+      let mut message = error.to_string();
+      let mut cause = error.source();
+
+      while let Some(next) = cause {
+          message.push_str(": ");
+          message.push_str(&next.to_string());
+          cause = next.source();
+      }
+
+      message
+  }
+#+end_src
+
 * Вхід через майстер-пароль
 
 Обов'язкові змінні середовища — ~BWM_SERVER~, ~BWM_EMAIL~, ~BWM_PASSWD~ (усі з [[file:env.org][~env.org~]]). Відсутня
@@ -87,7 +112,7 @@ Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ д�
           .auth()
           .login_password(&PasswordLoginRequest { email, password, two_factor: None })
           .await
-          .map_err(|error| format!("Не вдалося увійти в Bitwarden: {}", error))?;
+          .map_err(|error| format!("Не вдалося увійти в Bitwarden: {}", describe(&error)))?;
 
       if result.two_factor.is_some() {
           return Err("Акаунт вимагає двофакторну автентифікацію — bwm-mcp поки її не підтримує.".to_string());
@@ -123,7 +148,7 @@ Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ д�
       sync_client
           .sync(SyncRequest { force: false, exclude_subdomains: None })
           .await
-          .map_err(|error| format!("Не вдалося синхронізувати сейф: {}", error))?;
+          .map_err(|error| format!("Не вдалося синхронізувати сейф: {}", describe(&error)))?;
 
       Ok(())
   }

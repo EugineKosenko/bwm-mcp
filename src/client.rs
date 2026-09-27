@@ -4,6 +4,7 @@ use std::env;
 use bitwarden_auth::token_management::PasswordManagerTokenHandler;
 use bitwarden_core::ClientBuilder;
 use std::sync::Arc;
+use std::error::Error as StdError;
 use bitwarden_core::auth::login::PasswordLoginRequest;
 use bitwarden_core::FromClient;
 use bitwarden_sync::{SyncClientExt, SyncRequest};
@@ -23,6 +24,18 @@ fn build(server: &str) -> Bw {
         .with_settings(settings(server))
         .build()
 }
+fn describe(error: &(dyn StdError + 'static)) -> String {
+    let mut message = error.to_string();
+    let mut cause = error.source();
+
+    while let Some(next) = cause {
+        message.push_str(": ");
+        message.push_str(&next.to_string());
+        cause = next.source();
+    }
+
+    message
+}
 fn required(name: &str) -> Result<String, String> {
     env::var(name).map_err(|_| format!("Змінну середовища {} не задано (див. .env.example).", name))
 }
@@ -32,7 +45,7 @@ async fn login(bw: &Bw, email: String, password: String) -> Result<(), String> {
         .auth()
         .login_password(&PasswordLoginRequest { email, password, two_factor: None })
         .await
-        .map_err(|error| format!("Не вдалося увійти в Bitwarden: {}", error))?;
+        .map_err(|error| format!("Не вдалося увійти в Bitwarden: {}", describe(&error)))?;
 
     if result.two_factor.is_some() {
         return Err("Акаунт вимагає двофакторну автентифікацію — bwm-mcp поки її не підтримує.".to_string());
@@ -48,7 +61,7 @@ async fn sync(bw: &Bw) -> Result<(), String> {
     sync_client
         .sync(SyncRequest { force: false, exclude_subdomains: None })
         .await
-        .map_err(|error| format!("Не вдалося синхронізувати сейф: {}", error))?;
+        .map_err(|error| format!("Не вдалося синхронізувати сейф: {}", describe(&error)))?;
 
     Ok(())
 }

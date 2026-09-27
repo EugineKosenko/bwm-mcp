@@ -3,6 +3,17 @@ mod tools;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+fn print_help() {
+    println!("bwm-mcp — MCP-сервер для Bitwarden/Vaultwarden (json-rpc над stdio).");
+    println!();
+    println!("Змінні середовища (усі обов'язкові):");
+    println!("  BWM_SERVER   базова адреса Vaultwarden без кінцевого слеша (напр. https://localhost:8443)");
+    println!("  BWM_EMAIL    пошта облікового запису");
+    println!("  BWM_PASSWD   майстер-пароль облікового запису");
+    println!();
+    println!("Довіри до самопідписаного сертифіката сервера (TLS) поки не реалізовано (див. env.org) —");
+    println!("самопідписаний сертифікат призведе до помилки під час входу.");
+}
 async fn dispatch(bw: Arc<client::Bw>, method: String, params: serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     match method.as_str() {
         "initialize" => Ok(serde_json::json!({
@@ -29,6 +40,11 @@ async fn write_response(stdout: &mut tokio::io::Stdout, response: &serde_json::V
 
 #[tokio::main]
 async fn main() {
+    if std::env::args().skip(1).any(|arg| arg == "--help" || arg == "-h") {
+        print_help();
+        return;
+    }
+
     dotenvy::dotenv().ok();
     let bw = match client::connect().await {
         Ok(bw) => Arc::new(bw),

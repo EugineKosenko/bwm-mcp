@@ -24,6 +24,27 @@
   mod tools;
 #+end_src
 
+* Довідка (~--help~)
+
+=mcp=-клієнт (Claude Code) передає всі параметри через змінні середовища, а не через аргументи
+командного рядка, тож аргументів застосунок не приймає — окрім самої довідки. Без цієї перевірки
+~--help~ проходив далі до ~client::connect()~ і провалювався на відсутньому ~BWM_SERVER~, показуючи
+загальну помилку користувача замість довідки.
+
+#+begin_src rust :noweb-ref Визначення
+  fn print_help() {
+      println!("bwm-mcp — MCP-сервер для Bitwarden/Vaultwarden (json-rpc над stdio).");
+      println!();
+      println!("Змінні середовища (усі обов'язкові):");
+      println!("  BWM_SERVER   базова адреса Vaultwarden без кінцевого слеша (напр. https://localhost:8443)");
+      println!("  BWM_EMAIL    пошта облікового запису");
+      println!("  BWM_PASSWD   майстер-пароль облікового запису");
+      println!();
+      println!("Довіри до самопідписаного сертифіката сервера (TLS) поки не реалізовано (див. env.org) —");
+      println!("самопідписаний сертифікат призведе до помилки під час входу.");
+  }
+#+end_src
+
 * Модуль
 
 Цикл читає ~stdin~ порядково, поки клієнт не закриє канал (тоді ~next_line~ поверне ~None~ і процес
@@ -46,6 +67,11 @@
 
   #[tokio::main]
   async fn main() {
+      if std::env::args().skip(1).any(|arg| arg == "--help" || arg == "-h") {
+          print_help();
+          return;
+      }
+
       dotenvy::dotenv().ok();
       let bw = match client::connect().await {
           Ok(bw) => Arc::new(bw),
