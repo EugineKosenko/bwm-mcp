@@ -37,9 +37,10 @@
 
 Жодна дія, крім ~rotate_secret~ (нижче), не повертає ~login.password~/~login.totp~ агенту — навіть
 коли сама дія їх не змінювала (напр. ~get~/~edit~ повертають повний обʼєкт із уже наявним паролем).
-Прибираємо ці два поля рекурсивно з уже серіалізованого ~JSON~, а не з самого типу — так самий фільтр
-працює і для повного ~CipherView~ (~get~/~create~/~edit~), і для переліку ~CipherListView~, чия форма
-енкодування варіанта ~CipherListViewType~ наперед невідома.
+Так само ніколи не повертається ~sshKey.privateKey~ (елемент типу ~5~, =ssh key=): публічний ключ
+і відбиток лишаються. Прибираємо ці поля рекурсивно з уже серіалізованого ~JSON~, а не з самого типу
+— так самий фільтр працює і для повного ~CipherView~ (~get~/~create~/~edit~), і для переліку
+~CipherListView~, чия форма енкодування варіанта ~CipherListViewType~ наперед невідома.
 
 #+begin_src rust :noweb-ref Визначення
   fn redact(value: &mut serde_json::Value) {
@@ -47,6 +48,7 @@
           serde_json::Value::Object(fields) => {
               fields.remove("password");
               fields.remove("totp");
+              fields.remove("privateKey");
 
               for field in fields.values_mut() {
                   redact(field);
@@ -82,26 +84,67 @@
 
 * Перелік
 
-Повертає лише успішно розшифровані елементи (~successes~); елементи, які не вдалось розшифрувати
-(~failures~, зашифрованими), мовчки пропускаємо — для першої версії достатньо. ~CipherListView~ і так
+Відповідь — обʼєкт ~{ items, failures }~: ~items~ — успішно розшифровані елементи (~successes~), ~failures~
+— лише ~id~, ~type~ і ~folderId~ елементів, які SDK не зміг розшифрувати чи розібрати (вміст зашифрований і
+не повертається). Раніше такі елементи мовчки відкидались — так зникали елементи типу ~5~ (=ssh key=).
+Фільтри ~name~/~folderId~ застосовуються лише до ~items~. ~CipherListView~ і так
 не має поля ~password~ (перевірено рядком-у-рядок з ~cargo doc~, див.
 ~spcfctn/code/bitwarden-rust-sdk.md~), але ~totp~ там є — тож ~redact~ однаково потрібен.
 
 #+begin_src rust :noweb-ref Визначення
-  async fn list(bw: &client::Bw) -> Result<String, String> {
+  async fn list(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
       let result = bw.vault().ciphers().list().await.map_err(|error| error.to_string())?;
-      let mut value = serde_json::to_value(&result.successes).unwrap();
-      redact(&mut value);
+      let name = arguments["name"].as_str().map(|name| name.to_lowercase());
+      let folder = arguments["folderId"].as_str();
 
-      Ok(value.to_string())
+      let mut items = serde_json::to_value(&result.successes).unwrap();
+      items.as_array_mut().unwrap().retain(|item| {
+          name.as_ref().map_or(true, |name| item["name"].as_str().unwrap().to_lowercase().contains(name))
+              && folder.map_or(true, |folder| item["folderId"].as_str() == Some(folder))
+      });
+      redact(&mut items);
+
+      let failures: Vec<serde_json::Value> = result
+          .failures
+          .iter()
+          .map(|cipher| {
+              let value = serde_json::to_value(cipher).unwrap();
+              serde_json::json!({ "id": value["id"], "type": value["type"], "folderId": value["folderId"] })
+          })
+          .collect();
+
+      Ok(serde_json::json!({ "items": items, "failures": failures }).to_string())
+  }
+#+end_src
+
+Необовʼязкові фільтри ~name~ (підрядок без урахування регістру) і ~folderId~ (точний збіг) звужують
+перелік ще до серіалізації відповіді: повний перелік сейфа — понад мегабайт, і агенту він зазвичай не
+потрібен.
+
+* Синхронізація
+
+~bwm-mcp~ синхронізується з сервером один раз при старті процесу (~client::connect~), тож елементи,
+створені чи змінені деінде (клієнтом ~Bitwarden~, іншою сесією) після цього не видно, доки процес не
+перезапущено. Дія ~sync~ виконує повторну синхронізацію (~force: true~) без перепідключення й повторного
+входу.
+
+#+begin_src rust :noweb-ref Визначення
+  async fn resync(bw: &client::Bw) -> Result<String, String> {
+      client::sync(bw, true).await?;
+
+      Ok("Синхронізовано.".to_string())
   }
 #+end_src
 
 * Створення
 
-Підтримано два типи — ~login~ (~type: 1~) і ~secureNote~ (~type: 2~) — той самий набір значень, що й
-у офіційному сервері. ~card~ / ~identity~ не підтримано: аргумент ~type~ поза ~{1, 2}~ дає зрозумілу
-помилку, а не незрозумілий збій десь глибше в ~CipherViewType~.
+Підтримано три типи — ~login~ (~type: 1~), ~secureNote~ (~type: 2~) і =ssh key= (~type: 5~) — той самий
+набір значень, що й у офіційному сервері. ~card~ / ~identity~ не підтримано: аргумент ~type~ поза
+~{1, 2, 5}~ дає зрозумілу помилку, а не незрозумілий збій десь глибше в ~CipherViewType~.
+
+Ключ =ssh= (~type: 5~) завжди генерується самим ~bwm-mcp~ (~bitwarden_ssh::generator::generate_sshkey~,
+алгоритм ~sshKey.algorithm~, типово ~ed25519~) і одразу йде в елемент: приватна частина не передається
+агентом і не повертається у відповіді (~redact~), публічний ключ і відбиток — повертаються.
 
 Агент не може передати готове значення ~login.password~ (і взагалі не може ~login.totp~ — генератора
 ~totp~-секрету в =SDK= немає, на відміну від пароля): єдиний спосіб отримати пароль при створенні —
@@ -110,9 +153,10 @@
 
 #+begin_src rust :noweb-ref Декларації
   use bitwarden_generators::{GeneratorClientsExt, PasswordGeneratorRequest};
+  use bitwarden_ssh::generator::{generate_sshkey, KeyAlgorithm};
   use bitwarden_vault::{
       CipherCreateRequest, CipherRepromptType, CipherViewType, LoginUriView, LoginView,
-      SecureNoteType, SecureNoteView, UriMatchType,
+      SecureNoteType, SecureNoteView, SshKeyView, UriMatchType,
   };
 #+end_src
 
@@ -156,11 +200,27 @@
       }
   }
 
+  fn generate_key(algorithm: Option<&str>) -> Result<SshKeyView, String> {
+      let algorithm = match algorithm.unwrap_or("ed25519") {
+          "ed25519" => KeyAlgorithm::Ed25519,
+          "rsa3072" => KeyAlgorithm::Rsa3072,
+          "rsa4096" => KeyAlgorithm::Rsa4096,
+          "ecdsap256" => KeyAlgorithm::EcdsaP256,
+          "ecdsap384" => KeyAlgorithm::EcdsaP384,
+          "ecdsap521" => KeyAlgorithm::EcdsaP521,
+          _ => return Err("sshKey.algorithm: ed25519/rsa3072/rsa4096/ecdsap256/ecdsap384/ecdsap521.".to_string()),
+      };
+      let key = generate_sshkey(algorithm).map_err(|error| error.to_string())?;
+
+      Ok(SshKeyView { private_key: key.private_key, public_key: key.public_key, fingerprint: key.fingerprint })
+  }
+
   fn cipher_type(arguments: &serde_json::Value) -> Result<CipherViewType, String> {
       match arguments["type"].as_i64() {
           Some(1) => Ok(CipherViewType::Login(login_view(arguments))),
           Some(2) => Ok(CipherViewType::SecureNote(SecureNoteView { r#type: SecureNoteType::Generic })),
-          _ => Err("Потрібен аргумент type: 1 (login) або 2 (secureNote).".to_string()),
+          Some(5) => Ok(CipherViewType::SshKey(generate_key(arguments["sshKey"]["algorithm"].as_str())?)),
+          _ => Err("Потрібен аргумент type: 1 (login), 2 (secureNote) або 5 (sshKey).".to_string()),
       }
   }
 
@@ -261,8 +321,10 @@
 Єдина дія, що встановлює нове значення ~login.password~/~login.totp~ — навмисно окрема від
 звичайного ~edit~ (не додає ~login~ у його аргументи), щоб пізніше її можна було обмежити окремим
 правилом (без ризику зачепити звичайне редагування ~folderId~/~name~/~notes~). На відміну від решти
-дій, відповідь тут ~redact~ не проходить — покликач сам щойно передав ці значення, приховувати
-нічого.
+дій, відповідь для ~login~ тут ~redact~ не проходить — покликач сам щойно передав ці значення,
+приховувати нічого. Для елемента =ssh key= (~type: 5~) ротація — повторна генерація ключа всередині
+~bwm-mcp~ (~secret.algorithm~, типово ~ed25519~): агент нового ключа не бачив, тож відповідь ~redact~
+проходить, приватної частини в ній нема.
 
 #+begin_src rust :noweb-ref Визначення
   async fn rotate_secret(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
@@ -270,8 +332,17 @@
       let view = bw.vault().ciphers().get(&id).await.map_err(|error| error.to_string())?;
       let mut request = CipherEditRequest::try_from(view).map_err(|error| error.to_string())?;
 
+      if let CipherViewType::SshKey(key) = &mut request.r#type {
+          *key = generate_key(arguments["secret"]["algorithm"].as_str())?;
+          let updated = bw.vault().ciphers().edit(request).await.map_err(|error| error.to_string())?;
+          let mut value = serde_json::to_value(&updated).unwrap();
+          redact(&mut value);
+
+          return Ok(value.to_string());
+      }
+
       let CipherViewType::Login(login) = &mut request.r#type else {
-          return Err("rotate_secret можливий лише для елементів login.".to_string());
+          return Err("rotate_secret можливий лише для елементів login і sshKey.".to_string());
       };
 
       let password = arguments["secret"]["password"].as_str();
@@ -302,12 +373,13 @@
 #+begin_src rust :noweb-ref Визначення
   pub async fn run(bw: &client::Bw, arguments: &serde_json::Value) -> serde_json::Value {
       let result = match arguments["action"].as_str() {
-          Some("list") => list(bw).await,
+          Some("list") => list(bw, arguments).await,
+          Some("sync") => resync(bw).await,
           Some("get") => get(bw, arguments).await,
           Some("create") => create(bw, arguments).await,
           Some("edit") => edit(bw, arguments).await,
           Some("rotate_secret") => rotate_secret(bw, arguments).await,
-          _ => Err("Потрібен аргумент action: list/get/create/edit/rotate_secret.".to_string()),
+          _ => Err("Потрібен аргумент action: list/get/create/edit/rotate_secret/sync.".to_string()),
       };
 
       reply(result)

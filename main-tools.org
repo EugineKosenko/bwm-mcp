@@ -123,16 +123,16 @@
 #+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Опис
   {
       "name": "items",
-      "description": "Робота з елементами сейфа, без прямого доступу до секретів: list (усі елементи), get (обʼєкт за id), create (login чи secureNote, потрібні name і type; пароль лише через login.generatePassword — готове значення передати не можна), edit (змінити folderId/name/notes, login не чіпає), rotate_secret (єдина дія, що встановлює нове secret.password/secret.totp — для сценарію ротації).",
+      "description": "Робота з елементами сейфа, без прямого доступу до секретів (password, totp, sshKey.privateKey не повертаються): list (елементи; необовʼязкові фільтри name — підрядок, folderId), sync (повторна синхронізація з сервером — елементи, створені деінде після старту, інакше не видно), get (обʼєкт за id), create (login, secureNote чи sshKey, потрібні name і type; пароль лише через login.generatePassword, ключ ssh для type=5 генерується самим сервером — готове значення передати не можна), edit (змінити folderId/name/notes, login не чіпає), rotate_secret (єдина дія, що встановлює нове secret.password/secret.totp для login або перегенеровує ключ для sshKey — сценарій ротації).",
       "inputSchema": {
           "type": "object",
           "properties": {
-              "action": { "type": "string", "enum": ["list", "get", "create", "edit", "rotate_secret"] },
+              "action": { "type": "string", "enum": ["list", "get", "create", "edit", "rotate_secret", "sync"] },
               "id": { "type": "string", "description": "ID елемента (для get/edit/rotate_secret)" },
-              "type": { "type": "integer", "enum": [1, 2], "description": "1 — login, 2 — secureNote (для create)" },
-              "name": { "type": "string", "description": "Назва (для create/edit)" },
+              "type": { "type": "integer", "enum": [1, 2, 5], "description": "1 — login, 2 — secureNote, 5 — sshKey: ключ генерується самим сервером, приватна частина не повертається (для create)" },
+              "name": { "type": "string", "description": "Назва (для create/edit); для list — підрядок назви без урахування регістру" },
               "notes": { "type": "string", "description": "Нотатки (для create/edit)" },
-              "folderId": { "type": "string", "description": "Тека (для create/edit)" },
+              "folderId": { "type": "string", "description": "Тека (для create/edit); для list — фільтр за текою" },
               "login": {
                   "type": "object",
                   "description": "Дані для type=1 (login) при create — без секретів",
@@ -151,12 +151,20 @@
                       }
                   }
               },
+              "sshKey": {
+                  "type": "object",
+                  "description": "Для type=5 при create",
+                  "properties": {
+                      "algorithm": { "type": "string", "enum": ["ed25519", "rsa3072", "rsa4096", "ecdsap256", "ecdsap384", "ecdsap521"], "description": "Типово ed25519" }
+                  }
+              },
               "secret": {
                   "type": "object",
-                  "description": "Нові значення секретів (лише для rotate_secret) — принаймні одне з двох",
+                  "description": "Лише для rotate_secret: для login — нові password/totp (принаймні одне); для sshKey — algorithm (ключ генерується наново, значення не повертається)",
                   "properties": {
                       "password": { "type": "string" },
-                      "totp": { "type": "string" }
+                      "totp": { "type": "string" },
+                      "algorithm": { "type": "string", "enum": ["ed25519", "rsa3072", "rsa4096", "ecdsap256", "ecdsap384", "ecdsap521"] }
                   }
               }
           },

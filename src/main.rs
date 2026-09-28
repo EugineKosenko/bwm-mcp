@@ -45,6 +45,10 @@ async fn main() {
         return;
     }
 
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_max_level(tracing_subscriber::filter::LevelFilter::ERROR)
+        .init();
     dotenvy::dotenv().ok();
     let bw = match client::connect().await {
         Ok(bw) => Arc::new(bw),

@@ -708,11 +708,13 @@ dependencies = [
  "bitwarden-auth",
  "bitwarden-core",
  "bitwarden-generators",
+ "bitwarden-ssh",
  "bitwarden-sync",
  "bitwarden-vault",
  "dotenvy",
  "serde_json",
  "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]

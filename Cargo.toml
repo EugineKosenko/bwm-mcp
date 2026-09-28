@@ -6,9 +6,11 @@ edition = "2021"
 [dependencies]
 dotenvy = "*"
 serde_json = "*"
+tracing-subscriber = "*"
 tokio = { version = "*", features = ["macros", "rt-multi-thread", "io-std", "io-util"] }
 bitwarden-core = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010", features = ["internal"] }
 bitwarden-vault = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
 bitwarden-auth = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
 bitwarden-sync = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
 bitwarden-generators = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
+bitwarden-ssh = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }

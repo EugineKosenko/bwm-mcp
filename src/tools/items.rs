@@ -1,9 +1,10 @@
 use crate::client;
 use bitwarden_vault::VaultClientExt;
 use bitwarden_generators::{GeneratorClientsExt, PasswordGeneratorRequest};
+use bitwarden_ssh::generator::{generate_sshkey, KeyAlgorithm};
 use bitwarden_vault::{
     CipherCreateRequest, CipherRepromptType, CipherViewType, LoginUriView, LoginView,
-    SecureNoteType, SecureNoteView, UriMatchType,
+    SecureNoteType, SecureNoteView, SshKeyView, UriMatchType,
 };
 use bitwarden_vault::CipherEditRequest;
 use crate::tools::reply;
@@ -16,6 +17,7 @@ fn redact(value: &mut serde_json::Value) {
         serde_json::Value::Object(fields) => {
             fields.remove("password");
             fields.remove("totp");
+            fields.remove("privateKey");
 
             for field in fields.values_mut() {
                 redact(field);
@@ -37,12 +39,33 @@ async fn get(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, S
 
     Ok(value.to_string())
 }
-async fn list(bw: &client::Bw) -> Result<String, String> {
+async fn list(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
     let result = bw.vault().ciphers().list().await.map_err(|error| error.to_string())?;
-    let mut value = serde_json::to_value(&result.successes).unwrap();
-    redact(&mut value);
+    let name = arguments["name"].as_str().map(|name| name.to_lowercase());
+    let folder = arguments["folderId"].as_str();
 
-    Ok(value.to_string())
+    let mut items = serde_json::to_value(&result.successes).unwrap();
+    items.as_array_mut().unwrap().retain(|item| {
+        name.as_ref().map_or(true, |name| item["name"].as_str().unwrap().to_lowercase().contains(name))
+            && folder.map_or(true, |folder| item["folderId"].as_str() == Some(folder))
+    });
+    redact(&mut items);
+
+    let failures: Vec<serde_json::Value> = result
+        .failures
+        .iter()
+        .map(|cipher| {
+            let value = serde_json::to_value(cipher).unwrap();
+            serde_json::json!({ "id": value["id"], "type": value["type"], "folderId": value["folderId"] })
+        })
+        .collect();
+
+    Ok(serde_json::json!({ "items": items, "failures": failures }).to_string())
+}
+async fn resync(bw: &client::Bw) -> Result<String, String> {
+    client::sync(bw, true).await?;
+
+    Ok("Синхронізовано.".to_string())
 }
 fn uri_match(value: &serde_json::Value) -> Option<UriMatchType> {
     match value.as_i64() {
@@ -83,11 +106,27 @@ fn login_view(arguments: &serde_json::Value) -> LoginView {
     }
 }
 
+fn generate_key(algorithm: Option<&str>) -> Result<SshKeyView, String> {
+    let algorithm = match algorithm.unwrap_or("ed25519") {
+        "ed25519" => KeyAlgorithm::Ed25519,
+        "rsa3072" => KeyAlgorithm::Rsa3072,
+        "rsa4096" => KeyAlgorithm::Rsa4096,
+        "ecdsap256" => KeyAlgorithm::EcdsaP256,
+        "ecdsap384" => KeyAlgorithm::EcdsaP384,
+        "ecdsap521" => KeyAlgorithm::EcdsaP521,
+        _ => return Err("sshKey.algorithm: ed25519/rsa3072/rsa4096/ecdsap256/ecdsap384/ecdsap521.".to_string()),
+    };
+    let key = generate_sshkey(algorithm).map_err(|error| error.to_string())?;
+
+    Ok(SshKeyView { private_key: key.private_key, public_key: key.public_key, fingerprint: key.fingerprint })
+}
+
 fn cipher_type(arguments: &serde_json::Value) -> Result<CipherViewType, String> {
     match arguments["type"].as_i64() {
         Some(1) => Ok(CipherViewType::Login(login_view(arguments))),
         Some(2) => Ok(CipherViewType::SecureNote(SecureNoteView { r#type: SecureNoteType::Generic })),
-        _ => Err("Потрібен аргумент type: 1 (login) або 2 (secureNote).".to_string()),
+        Some(5) => Ok(CipherViewType::SshKey(generate_key(arguments["sshKey"]["algorithm"].as_str())?)),
+        _ => Err("Потрібен аргумент type: 1 (login), 2 (secureNote) або 5 (sshKey).".to_string()),
     }
 }
 
@@ -172,8 +211,17 @@ async fn rotate_secret(bw: &client::Bw, arguments: &serde_json::Value) -> Result
     let view = bw.vault().ciphers().get(&id).await.map_err(|error| error.to_string())?;
     let mut request = CipherEditRequest::try_from(view).map_err(|error| error.to_string())?;
 
+    if let CipherViewType::SshKey(key) = &mut request.r#type {
+        *key = generate_key(arguments["secret"]["algorithm"].as_str())?;
+        let updated = bw.vault().ciphers().edit(request).await.map_err(|error| error.to_string())?;
+        let mut value = serde_json::to_value(&updated).unwrap();
+        redact(&mut value);
+
+        return Ok(value.to_string());
+    }
+
     let CipherViewType::Login(login) = &mut request.r#type else {
-        return Err("rotate_secret можливий лише для елементів login.".to_string());
+        return Err("rotate_secret можливий лише для елементів login і sshKey.".to_string());
     };
 
     let password = arguments["secret"]["password"].as_str();
@@ -195,12 +243,13 @@ async fn rotate_secret(bw: &client::Bw, arguments: &serde_json::Value) -> Result
 }
 pub async fn run(bw: &client::Bw, arguments: &serde_json::Value) -> serde_json::Value {
     let result = match arguments["action"].as_str() {
-        Some("list") => list(bw).await,
+        Some("list") => list(bw, arguments).await,
+        Some("sync") => resync(bw).await,
         Some("get") => get(bw, arguments).await,
         Some("create") => create(bw, arguments).await,
         Some("edit") => edit(bw, arguments).await,
         Some("rotate_secret") => rotate_secret(bw, arguments).await,
-        _ => Err("Потрібен аргумент action: list/get/create/edit/rotate_secret.".to_string()),
+        _ => Err("Потрібен аргумент action: list/get/create/edit/rotate_secret/sync.".to_string()),
     };
 
     reply(result)

@@ -42,10 +42,16 @@ Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ д�
       ClientSettings {
           identity_url: format!("{}/identity", server),
           api_url: format!("{}/api", server),
+          bitwarden_client_version: Some("2026.6.0".to_string()),
           ..Default::default()
       }
   }
 #+end_src
+
+~ClientSettings::default()~ лишає ~bitwarden_client_version~ порожнім, тож SDK не шле заголовок
+~Bitwarden-Client-Version~. =Vaultwarden= (гіпотеза, перевіряється) не віддає в ~/sync~ нові типи
+елементів клієнтам без версії чи зі старою — так зникали елементи типу ~5~ (=ssh key=), які бачить ~bw~.
+Тому вказуємо сучасну версію, ту саму, що сервер повідомляє в ~/api/config~ (~2026.6.0~).
 
 * Побудова клієнта
 
@@ -140,13 +146,13 @@ Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ д�
 #+end_src
 
 #+begin_src rust :noweb-ref Визначення
-  async fn sync(bw: &Bw) -> Result<(), String> {
+  pub async fn sync(bw: &Bw, force: bool) -> Result<(), String> {
       let sync_client = bw.sync();
       sync_client.register_sync_handler(Arc::new(FolderSyncHandler::from_client(bw)));
       sync_client.register_sync_handler(Arc::new(CipherSyncHandler::from_client(bw)));
 
       sync_client
-          .sync(SyncRequest { force: false, exclude_subdomains: None })
+          .sync(SyncRequest { force, exclude_subdomains: None })
           .await
           .map_err(|error| format!("Не вдалося синхронізувати сейф: {}", describe(&error)))?;
 
@@ -168,7 +174,7 @@ Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ д�
       let bw = build(&server);
 
       login(&bw, email, password).await?;
-      sync(&bw).await?;
+      sync(&bw, false).await?;
 
       Ok(bw)
   }

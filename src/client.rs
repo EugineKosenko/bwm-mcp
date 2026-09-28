@@ -15,6 +15,7 @@ fn settings(server: &str) -> ClientSettings {
     ClientSettings {
         identity_url: format!("{}/identity", server),
         api_url: format!("{}/api", server),
+        bitwarden_client_version: Some("2026.6.0".to_string()),
         ..Default::default()
     }
 }
@@ -53,13 +54,13 @@ async fn login(bw: &Bw, email: String, password: String) -> Result<(), String> {
 
     Ok(())
 }
-async fn sync(bw: &Bw) -> Result<(), String> {
+pub async fn sync(bw: &Bw, force: bool) -> Result<(), String> {
     let sync_client = bw.sync();
     sync_client.register_sync_handler(Arc::new(FolderSyncHandler::from_client(bw)));
     sync_client.register_sync_handler(Arc::new(CipherSyncHandler::from_client(bw)));
 
     sync_client
-        .sync(SyncRequest { force: false, exclude_subdomains: None })
+        .sync(SyncRequest { force, exclude_subdomains: None })
         .await
         .map_err(|error| format!("Не вдалося синхронізувати сейф: {}", describe(&error)))?;
 
@@ -73,7 +74,7 @@ pub async fn connect() -> Result<Bw, String> {
     let bw = build(&server);
 
     login(&bw, email, password).await?;
-    sync(&bw).await?;
+    sync(&bw, false).await?;
 
     Ok(bw)
 }
