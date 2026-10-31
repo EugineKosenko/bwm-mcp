@@ -15,33 +15,90 @@
 
 * Підмодулі
 
-~client~ — вхід до Bitwarden/Vaultwarden (автентифікація, синхронізація, сейф), див.
-[[file:main-client.org][~main-client.org~]]. ~tools~ — реєстр і диспетчеризація інструментів, див.
-[[file:main-tools.org][~main-tools.org~]].
+~client~ — вхід до Bitwarden/Vaultwarden (побудова клієнта, синхронізація, сейф), див.
+[[file:main-client.org][~main-client.org~]]. ~state~ — збереження стану між запусками процесу, див. [[file:state.org][~state.org~]]. ~login~ —
+мережевий вхід, рідкісна явна команда, див. [[file:login.org][~login.org~]]. ~unlock~ — локальне розблокування без
+мережі, звичайний шлях старту сервера, див. [[file:unlock.org][~unlock.org~]]. ~tools~ — реєстр і диспетчеризація
+інструментів, див. [[file:main-tools.org][~main-tools.org~]].
 
 #+begin_src rust :noweb-ref Декларації
   mod client;
+  mod state;
+  mod login;
+  mod unlock;
   mod tools;
 #+end_src
 
 * Довідка (~--help~)
 
-=mcp=-клієнт (Claude Code) передає всі параметри через змінні середовища, а не через аргументи
-командного рядка, тож аргументів застосунок не приймає — окрім самої довідки. Без цієї перевірки
-~--help~ проходив далі до ~client::connect()~ і провалювався на відсутньому ~BWM_SERVER~, показуючи
-загальну помилку користувача замість довідки.
+=mcp=-клієнт (Claude Code) передає параметри звичайного старту через змінні середовища, а не через
+аргументи командного рядка — окрім самої довідки й команд ~login~/~logout~ (які запускає вручну сам
+користувач у терміналі, не =mcp=-клієнт, [[file:login.org][~login.org~]]/[[file:state.org][~state.org~]]). Без перевірки ~--help~ проходив
+далі до ~client::connect()~ і провалювався на відсутньому ~BW_SERVER~, показуючи загальну помилку
+користувача замість довідки. ~require_url~ — спільна перевірка позиційного аргументу для обох команд.
 
 #+begin_src rust :noweb-ref Визначення
+  fn require_url(command: &str) -> String {
+      std::env::args().nth(2).unwrap_or_else(|| {
+          eprintln!("Потрібен url сервера: bwm-mcp {command} <url>");
+          std::process::exit(1);
+      })
+  }
+
   fn print_help() {
       println!("bwm-mcp — MCP-сервер для Bitwarden/Vaultwarden (json-rpc над stdio).");
       println!();
-      println!("Змінні середовища (усі обов'язкові):");
-      println!("  BWM_SERVER   базова адреса Vaultwarden без кінцевого слеша (напр. https://localhost:8443)");
-      println!("  BWM_EMAIL    пошта облікового запису");
-      println!("  BWM_PASSWD   майстер-пароль облікового запису");
+      println!("Використання:");
+      println!("  bwm-mcp                запустити сервер (звичайний режим mcp-клієнта)");
+      println!("  bwm-mcp login <url>    увійти на сервер url (пошта/майстер-пароль інтерактивно), зберегти стан");
+      println!("  bwm-mcp logout <url>   видалити збережений стан (session-key, state.sqlite3) для сервера url");
+      println!();
+      println!("Звичайний старт сервера мережево НЕ логіниться — лише локально розблоковує вже збережений");
+      println!("стан (unlock.org) для сервера з BW_SERVER. Немає збереженого стану для нього — спершу");
+      println!("виконайте `bwm-mcp login <url>` вручну з тим самим url.");
+      println!();
+      println!("Стан окремий на кожен сервер (url) — можна входити на кілька різних Vaultwarden незалежно,");
+      println!("кожен проєкт у власному .mcp.json вказує BW_SERVER того сервера, з яким має працювати.");
+      println!();
+      println!("Змінна середовища (обов'язкова для звичайного старту сервера):");
+      println!("  BW_SERVER   базова адреса Vaultwarden без кінцевого слеша (напр. https://localhost:8443)");
       println!();
       println!("Довіри до самопідписаного сертифіката сервера (TLS) поки не реалізовано (див. env.org) —");
       println!("самопідписаний сертифікат призведе до помилки під час входу.");
+      println!();
+      println!("Локальний стан — ~/.local/share/bwm-mcp/<сервер>/ (state.sqlite3, session-key, права 600),");
+      println!("окремо на кожен url сервера.");
+      println!("Помилка старту додатково пишеться в ~/.local/state/bwm-mcp/last-error.log — mcp-клієнт");
+      println!("(Claude Code) не показує stderr невдалого підключення, лише \"connection closed\".");
+  }
+#+end_src
+
+* Журнал помилки запуску
+
+Клієнт =mcp= (Claude Code) при невдалому `/mcp reconnect` показує лише узагальнене "connection
+closed" — детальне повідомлення `connect()` (з ланцюгом `source()`, [[file:main-client.org][~main-client.org~]]) іде
+тільки в ~stderr~ і губиться. Тому додатково пишемо його у файл за =XDG_STATE_HOME=
+(`~/.local/state/bwm-mcp/last-error.log`, перезаписується щоразу) — після невдалого підключення
+досить подивитись цей файл, не перезапускаючи бінарник вручну. Запис — найкраща спроба: якщо каталог
+недоступний чи диск заповнений, помилка запису мовчки ігнорується (сам старт і так уже провалюється,
+подвоювати відмову нема сенсу). Для ~429~ (вичерпаний rate-limit входу Vaultwarden) додаємо коротку
+підказку про `LOGIN_RATELIMIT_MAX_BURST`/`LOGIN_RATELIMIT_SECONDS`.
+
+#+begin_src rust :noweb-ref Визначення
+  fn log_startup_error(message: &str) {
+      let hint = if message.contains("429") {
+          " Це, найімовірніше, rate-limit входу Vaultwarden \
+            (LOGIN_RATELIMIT_MAX_BURST/LOGIN_RATELIMIT_SECONDS) — часті реконекти вичерпують ліміт."
+      } else {
+          ""
+      };
+
+      let Ok(home) = std::env::var("HOME") else { return };
+      let dir = std::path::Path::new(&home).join(".local/state/bwm-mcp");
+
+      if std::fs::create_dir_all(&dir).is_ok() {
+          let _ = std::fs::write(dir.join("last-error.log"), format!("{message}{hint}\n"));
+      }
   }
 #+end_src
 
@@ -77,9 +134,37 @@
           .with_max_level(tracing_subscriber::filter::LevelFilter::ERROR)
           .init();
       dotenvy::dotenv().ok();
+
+      if std::env::args().nth(1).as_deref() == Some("login") {
+          let server = require_url("login");
+
+          match login::run(&server).await {
+              Ok(message) => println!("{message}"),
+              Err(message) => {
+                  eprintln!("{message}");
+                  std::process::exit(1);
+              }
+          }
+          return;
+      }
+
+      if std::env::args().nth(1).as_deref() == Some("logout") {
+          let server = require_url("logout");
+
+          match state::logout(&server) {
+              Ok(message) => println!("{message}"),
+              Err(message) => {
+                  eprintln!("{message}");
+                  std::process::exit(1);
+              }
+          }
+          return;
+      }
+
       let bw = match client::connect().await {
           Ok(bw) => Arc::new(bw),
           Err(message) => {
+              log_startup_error(&message);
               eprintln!("{}", message);
               std::process::exit(1);
           }

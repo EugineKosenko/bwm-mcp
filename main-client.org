@@ -29,19 +29,27 @@
 
 * Адреса сервера
 
-Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ до базової адреси — ~BWM_SERVER~ із ~.env~ не
-включає їх, див. [[file:env.org][~env.org~]].
+Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ до базової адреси — ~BW_SERVER~ із ~.env~ не
+включає їх, див. [[file:env.org][~env.org~]]. ~urls()~ окремо від ~settings()~ — той самий набір адрес потрібен і
+~ClientSettings~, і [[file:state.org][~state.org~]] (~SaveStateData.urls~ після входу).
 
 #+begin_src rust :noweb-ref Декларації
+  use bitwarden_core::client::persisted_state::BaseUrls;
   use bitwarden_core::ClientSettings;
   use std::env;
 #+end_src
 
 #+begin_src rust :noweb-ref Визначення
+  pub fn urls(server: &str) -> BaseUrls {
+      BaseUrls { identity_url: format!("{}/identity", server), api_url: format!("{}/api", server) }
+  }
+
   fn settings(server: &str) -> ClientSettings {
+      let BaseUrls { identity_url, api_url } = urls(server);
+
       ClientSettings {
-          identity_url: format!("{}/identity", server),
-          api_url: format!("{}/api", server),
+          identity_url,
+          api_url,
           bitwarden_client_version: Some("2026.6.0".to_string()),
           ..Default::default()
       }
@@ -58,19 +66,26 @@ Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ д�
 ~Client::new()~ за замовчуванням ставить ~NoopTokenHandler~, який панікує при спробі зберегти токени
 після успішного логіну (~"Cannot set tokens on NoopTokenHandler"~ — перевірено на практиці). Реальний
 ~bw~ явно підключає ~PasswordManagerTokenHandler~ через ~ClientBuilder~ — повторюємо той самий шлях.
+~with_state~ прикріплює реєстр [[file:state.org][~state.org~]] одразу при побудові — без нього ні ~unlock()~
+([[file:unlock.org][unlock.org]]), ні ~login()~ ([[file:login.org][login.org]]) не бачили б збереженого стану.
 
 #+begin_src rust :noweb-ref Декларації
   use bitwarden_auth::token_management::PasswordManagerTokenHandler;
   use bitwarden_core::ClientBuilder;
+  use bitwarden_state::registry::StateRegistry;
   use std::sync::Arc;
+  use crate::state;
 #+end_src
 
 #+begin_src rust :noweb-ref Визначення
-  fn build(server: &str) -> Bw {
-      ClientBuilder::new()
+  pub async fn build(server: &str) -> Result<Bw, String> {
+      let registry: StateRegistry = state::registry(server).await?;
+
+      Ok(ClientBuilder::new()
           .with_token_handler(Arc::new(PasswordManagerTokenHandler::default()))
           .with_settings(settings(server))
-          .build()
+          .with_state(registry)
+          .build())
   }
 #+end_src
 
@@ -78,14 +93,15 @@ Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ д�
 
 Деякі помилки крейтів ~sdk-internal~ (напр. ~reqwest-middleware::Error::Builder~) мають короткий
 ~Display~ верхнього рівня ("builder error") без самої причини — вона лежить у ~source()~. Тому
-повідомлення користувачу збираємо, розгортаючи весь ланцюг ~source()~, а не лише перший рівень.
+повідомлення користувачу збираємо, розгортаючи весь ланцюг ~source()~, а не лише перший рівень. ~pub~ —
+користується й [[file:login.org][~login.org~]].
 
 #+begin_src rust :noweb-ref Декларації
   use std::error::Error as StdError;
 #+end_src
 
 #+begin_src rust :noweb-ref Визначення
-  fn describe(error: &(dyn StdError + 'static)) -> String {
+  pub fn describe(error: &(dyn StdError + 'static)) -> String {
       let mut message = error.to_string();
       let mut cause = error.source();
 
@@ -99,32 +115,16 @@ Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ д�
   }
 #+end_src
 
-* Вхід через майстер-пароль
+* Змінна середовища
 
-Обов'язкові змінні середовища — ~BWM_SERVER~, ~BWM_EMAIL~, ~BWM_PASSWD~ (усі з [[file:env.org][~env.org~]]). Відсутня
-змінна — помилка користувача (не внутрішній збій), тож просте повідомлення, без паніки.
-
-#+begin_src rust :noweb-ref Декларації
-  use bitwarden_core::auth::login::PasswordLoginRequest;
-#+end_src
+Єдина обов'язкова змінна при звичайному старті сервера — ~BW_SERVER~ ([[file:env.org][~env.org~]]); ~BW_EMAIL~/~BW_PASSWD~
+більше не читаються з оточення взагалі — пошта й пароль питає інтерактивно лише команда ~login~
+([[file:login.org][~login.org~]]). Відсутня змінна — помилка користувача (не внутрішній збій), тож просте повідомлення, без
+паніки.
 
 #+begin_src rust :noweb-ref Визначення
-  fn required(name: &str) -> Result<String, String> {
+  pub fn required(name: &str) -> Result<String, String> {
       env::var(name).map_err(|_| format!("Змінну середовища {} не задано (див. .env.example).", name))
-  }
-
-  async fn login(bw: &Bw, email: String, password: String) -> Result<(), String> {
-      let result = bw
-          .auth()
-          .login_password(&PasswordLoginRequest { email, password, two_factor: None })
-          .await
-          .map_err(|error| format!("Не вдалося увійти в Bitwarden: {}", describe(&error)))?;
-
-      if result.two_factor.is_some() {
-          return Err("Акаунт вимагає двофакторну автентифікацію — bwm-mcp поки її не підтримує.".to_string());
-      }
-
-      Ok(())
   }
 #+end_src
 
@@ -162,20 +162,18 @@ Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ д�
 
 * Підключення
 
-Єдина точка входу для [[file:main.org][~main.org~]]: будує клієнт, входить, синхронізує — і повертає готовий до роботи
-~Bw~ чи зрозумілу причину невдачі.
+Єдина точка входу для [[file:main.org][~main.org~]]: лише локальний [[file:unlock.org][~unlock()~]] (без мережевого входу) — читає збережений
+~session-key~ ([[file:state.org][~state.org~]]), розблоковує криптостан, синхронізує. Немає збереженого стану (ще не
+виконано ~bwm-mcp login~) — зрозуміла причина невдачі, не внутрішній збій.
+
+#+begin_src rust :noweb-ref Декларації
+  use crate::unlock;
+#+end_src
 
 #+begin_src rust :noweb-ref Визначення
   pub async fn connect() -> Result<Bw, String> {
-      let server = required("BWM_SERVER")?;
-      let email = required("BWM_EMAIL")?;
-      let password = required("BWM_PASSWD")?;
+      let server = required("BW_SERVER")?;
 
-      let bw = build(&server);
-
-      login(&bw, email, password).await?;
-      sync(&bw, false).await?;
-
-      Ok(bw)
+      unlock::unlock(&server).await
   }
 #+end_src

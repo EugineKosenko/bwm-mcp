@@ -1,0 +1,185 @@
+#+title: Стан між запусками
+
+Довготривалий процес ~bwm-mcp~ усе одно перезапускається при кожному ~/mcp connect~/~reconnect~ клієнта
+=mcp= (Claude Code) — новий процес, нова пам'ять. Мережевий ~login~ ([[file:login.org][login.org]]) і локальний ~unlock~
+([[file:unlock.org][unlock.org]]) діляться станом лише через диск, рівно той самий принцип, що й у ~bwm-bwx~
+([[file:/home/eugine/job/personal/bw-mcp/code/bwm-bwx/state.org][state.org]]) — але власний, окремий каталог: конкурентний доступ до одного ~state.sqlite3~ з
+довгоживучого ~bwm-mcp~ і одноразових викликів ~bwm-bwx~ — зайвий ризик, а компоненти лишаються
+незалежними одне від одного за версіями/схемою міграцій.
+
+Два незалежні файли в одному каталозі: ~state.sqlite3~ (~StateRegistry~ =SDK=: токени автентифікації й
+обгорнутий криптостан акаунта) і ~session-key~ (рядкове представлення ~SessionKey~, крейт
+~bitwarden-unlock~, [[file:/home/eugine/job/personal/bw-mcp/spcfctn/code/bitwarden-rust-sdk.md][bitwarden-rust-sdk.md]]) — ключ, що розшифровує криптостан без майстер-пароля, права ~600~
+([[file:~/.claude/rules/project-meta.md][project-meta.md]]).
+
+Каталог — окремий на кожен сервер (~BW_SERVER~): таблиця ~Setting~, де =SDK= тримає токени й криптостан,
+поводиться як singleton на одну базу (немає в ній місця для ключа "сервер/акаунт") — два сервери в
+ОДНІЙ ~state.sqlite3~ затирали б одне одного. Тому каталог — ~.../bwm-mcp/<санітизована-назва-сервера>/~,
+а не один спільний на всю програму: кожен сервер — свій незалежний ~state.sqlite3~ і ~session-key~, і
+вхід в один не зачіпає стан іншого. Базовий каталог — за =XDG=: ~XDG_DATA_HOME~ (типово
+~~/.local/share~), не ~XDG_STATE_HOME~ (той лишається лише для ~last-error.log~, [[file:main.org][main.org]]) — це не
+лог/історія, а суттєвий стан, без якого сервер узагалі не стартує.
+
+#+begin_src rust :noweb yes :tangle src/state.rs
+  <<Декларації>>
+
+  <<Визначення>>
+#+end_src
+
+* Каталог
+
+Назва підкаталогу — сам ~server~ (адреса, напр. ~https://localhost:8443~), санітизована в безпечний
+для файлової системи вигляд: лише літери й цифри лишаються як є, решта (``:``/``/``/``.``) стає
+``-``. Читабельно (``ls`` одразу показує, який сервер де), а не хеш — зіткнення між кількома
+особистими серверами практично неможливе.
+
+#+begin_src rust :noweb-ref Декларації
+  use std::path::PathBuf;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  fn server_dir_name(server: &str) -> String {
+      server.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
+  }
+
+  fn server_path(server: &str) -> Result<PathBuf, String> {
+      let base = std::env::var("XDG_DATA_HOME")
+          .map(PathBuf::from)
+          .or_else(|_| std::env::var("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+          .map_err(|_| "не вдалося визначити домашній каталог (XDG_DATA_HOME/HOME)".to_string())?;
+
+      Ok(base.join("bwm-mcp").join(server_dir_name(server)))
+  }
+
+  fn dir(server: &str) -> Result<PathBuf, String> {
+      let dir = server_path(server)?;
+
+      std::fs::create_dir_all(&dir).map_err(|e| format!("не вдалося створити {}: {e}", dir.display()))?;
+
+      Ok(dir)
+  }
+#+end_src
+
+* Реєстр стану SDK
+
+Порожній перелік міграцій ламає навіть службову таблицю ~Setting~ (де =SDK= тримає токени й криптостан) —
+перевірено наживо в ~bwm-bwx~ (`state.org`). Правильний перелік — копія ~bitwarden-pm::get_sdk_managed_migrations()~
+(`crates/bitwarden-pm/src/migrations.rs` форку), не власна здогадка.
+
+#+begin_src rust :noweb-ref Декларації
+  use bitwarden_core::client::persisted_state::OrganizationSharedKey;
+  use bitwarden_send::Send;
+  use bitwarden_state::registry::StateRegistry;
+  use bitwarden_state::repository::{RepositoryItem, RepositoryMigrationStep, RepositoryMigrations};
+  use bitwarden_state::{DatabaseConfiguration, SettingItem};
+  use bitwarden_vault::{Cipher, Folder};
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  fn migrations() -> RepositoryMigrations {
+      use RepositoryMigrationStep::Add;
+
+      RepositoryMigrations::new(vec![
+          Add(Cipher::data()),
+          Add(Folder::data()),
+          Add(SettingItem::data()),
+          Add(OrganizationSharedKey::data()),
+          Add(Send::data()),
+      ])
+  }
+
+  pub async fn registry(server: &str) -> Result<StateRegistry, String> {
+      let configuration = DatabaseConfiguration::Sqlite {
+          db_name: "state".to_string(),
+          folder_path: dir(server)?,
+      };
+
+      StateRegistry::new_with_db(configuration, migrations())
+          .await
+          .map_err(|e| format!("не вдалося відкрити локальний стан: {e}"))
+  }
+#+end_src
+
+* Збереження криптостану після входу
+
+Єдиний споживач — [[file:login.org][login.org]]: сам ~login_password~ криптостан (~ACCOUNT_CRYPTO_STATE~) у прикріплений
+реєстр не пише — потрібен явний ~Client::save_to_state~ тим самим набором даних, що й реальний ~bw~
+(`crates/bw/src/main.rs` форку, той самий рецепт, що й у ~bwm-bwx~).
+
+#+begin_src rust :noweb-ref Декларації
+  use bitwarden_core::client::SaveStateData;
+  use bitwarden_core::key_management::account_cryptographic_state::WrappedAccountCryptographicState;
+  use bitwarden_core::{Client, UserId};
+  use crate::client::Bw;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  pub async fn save(
+      bw: &Bw,
+      user_id: UserId,
+      email: String,
+      server: &str,
+  ) -> Result<(), String> {
+      let crypto_state = WrappedAccountCryptographicState::get_from_key_store(&bw.internal.get_key_store().context())
+          .map_err(|e| format!("не вдалося прочитати криптостан акаунта: {e}"))?;
+
+      let data = SaveStateData { user_id, email, urls: crate::client::urls(server), crypto_state };
+
+      Client::save_to_state(data, &registry(server).await?)
+          .await
+          .map_err(|e| format!("не вдалося зберегти стан входу: {e}"))
+  }
+#+end_src
+
+* Файл сесійного ключа
+
+#+begin_src rust :noweb-ref Декларації
+  use std::os::unix::fs::PermissionsExt;
+  use std::str::FromStr;
+  use bitwarden_unlock::SessionKey;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  fn session_key_path(server: &str) -> Result<PathBuf, String> {
+      Ok(dir(server)?.join("session-key"))
+  }
+
+  pub fn save_session_key(server: &str, key: &SessionKey) -> Result<(), String> {
+      let path = session_key_path(server)?;
+
+      std::fs::write(&path, key.to_string()).map_err(|e| format!("не вдалося записати {}: {e}", path.display()))?;
+      std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+          .map_err(|e| format!("не вдалося встановити права 600 на {}: {e}", path.display()))
+  }
+
+  pub fn load_session_key(server: &str) -> Result<SessionKey, String> {
+      let path = session_key_path(server)?;
+      let text = std::fs::read_to_string(&path)
+          .map_err(|_| format!("локальний стан для {server} відсутній — спершу виконайте `bwm-mcp login {server}`"))?;
+
+      SessionKey::from_str(text.trim())
+          .map_err(|e| format!("пошкоджений файл сесійного ключа {}: {e}", path.display()))
+  }
+#+end_src
+
+* Вихід
+
+Протилежність ~login~: видаляє весь підкаталог стану конкретного сервера (``state.sqlite3`` і
+``session-key`` разом) — повніше й простіше, ніж ``UnlockClient::invalidate_session_key()`` (той лише
+прибирає один рядок із ``state.sqlite3``, лишаючи сам файл). ``fs::remove_dir_all`` тут — дозволений
+виняток із заборони ``rm -rf`` ([[file:~/.claude/rules/project-meta.md][project-meta.md]]): виклик усередині власної програми на
+Rust, не команда ``Bash``. Відсутній каталог — не помилка, вихід і так уже відбувся.
+
+#+begin_src rust :noweb-ref Визначення
+  pub fn logout(server: &str) -> Result<String, String> {
+      let path = server_path(server)?;
+
+      if !path.exists() {
+          return Ok(format!("Немає збереженого стану для {server}."));
+      }
+
+      std::fs::remove_dir_all(&path).map_err(|e| format!("не вдалося видалити {}: {e}", path.display()))?;
+
+      Ok(format!("Вихід виконано для {server}."))
+  }
+#+end_src

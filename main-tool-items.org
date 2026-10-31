@@ -2,17 +2,17 @@
 
 Робота з елементами сейфа (~ciphers~) через ~VaultClient::ciphers()~ (див. [[file:main-client.org][~main-client.org~]]): ~list~
 (перелік), ~get~ (повний розшифрований обʼєкт), ~create~ (новий елемент — ~login~ чи ~secureNote~) і
-~edit~ (записати зміну, зберігши решту полів як є). ~card~ / ~identity~ поки не підтримано — додамо,
-коли з'явиться реальна потреба. Усі чотири дії залежать від власного форку ~sdk-internal~ (див.
-[[file:config.org][~config.org~]]) — на апстрімі жодна б не спрацювала: немає ні синхронізації ~ciphers~, ні
-реекспорту типів запиту для ~create~ / ~edit~.
+~edit~ (записати зміну, зберігши решту полів як є). ~card~ / ~identity~ поки не підтримано — додамо, коли
+з'явиться реальна потреба. Усі чотири дії залежать від власного форку ~sdk-internal~ (див.  [[file:config.org][~config.org~]])
+— на апстрімі жодна б не спрацювала: немає ні синхронізації ~ciphers~, ні реекспорту типів запиту для
+~create~ / ~edit~.
 
-Перевірено на реальному перенесенні 271 картки (~it-manage~, 2026-09-24) — 271/271, 0 розбіжностей
-на незалежній звірці. Виявлена межа: елементи з непорожнім ~organizationId~ (спільні org-колекції)
-падають на ~edit~ з ~"Missing Key for Id: Organization(<id>)"~ — ~CipherSyncHandler~ синхронізує
-особисті ~ciphers~, але не тримає/не розшифровує org-ключ, потрібний для org-власних елементів. Не
-блокер (такі елементи й далі йдуть через ~bw~ CLI), але наступна прогалина форку після базового
-~items~, якщо колись знадобиться повна паритетність.
+Перевірено на реальному перенесенні 271 картки (~it-manage~, 2026-09-24) — 271/271, 0 розбіжностей на
+незалежній звірці. Виявлена межа: елементи з непорожнім ~organizationId~ (спільні org-колекції) падають
+на ~edit~ з ~"Missing Key for Id: Organization(<id>)"~ — ~CipherSyncHandler~ синхронізує особисті
+~ciphers~, але не тримає/не розшифровує org-ключ, потрібний для org-власних елементів. Не блокер (такі
+елементи й далі йдуть через ~bw~ CLI), але наступна прогалина форку після базового ~items~, якщо колись
+знадобиться повна паритетність.
 
 * Модуль
 
@@ -35,12 +35,12 @@
 
 * Приховування секретів
 
-Жодна дія, крім ~rotate_secret~ (нижче), не повертає ~login.password~/~login.totp~ агенту — навіть
-коли сама дія їх не змінювала (напр. ~get~/~edit~ повертають повний обʼєкт із уже наявним паролем).
-Так само ніколи не повертається ~sshKey.privateKey~ (елемент типу ~5~, =ssh key=): публічний ключ
-і відбиток лишаються. Прибираємо ці поля рекурсивно з уже серіалізованого ~JSON~, а не з самого типу
-— так самий фільтр працює і для повного ~CipherView~ (~get~/~create~/~edit~), і для переліку
-~CipherListView~, чия форма енкодування варіанта ~CipherListViewType~ наперед невідома.
+Жодна дія, крім ~rotate_secret~ (нижче), не повертає ~login.password~/~login.totp~ агенту — навіть коли
+сама дія їх не змінювала (напр. ~get~/~edit~ повертають повний обʼєкт із уже наявним паролем).  Так само
+ніколи не повертається ~sshKey.privateKey~ (елемент типу ~5~, =ssh key=): публічний ключ і відбиток
+лишаються. Прибираємо ці поля рекурсивно з уже серіалізованого ~JSON~, а не з самого типу — так самий
+фільтр працює і для повного ~CipherView~ (~get~/~create~/~edit~), і для переліку ~CipherListView~, чия
+форма енкодування варіанта ~CipherListViewType~ наперед невідома.
 
 #+begin_src rust :noweb-ref Визначення
   fn redact(value: &mut serde_json::Value) {
@@ -64,6 +64,51 @@
   }
 #+end_src
 
+* Логін підключення (тип sshKey)
+
+Для елемента =ssh key= (~type: 5~) поле ~SshKeyView~ не має місця для рядка "як підключатись" — лише
+~private_key~/~public_key~/~fingerprint~ (перевірено ~cargo doc~,
+~spcfctn/code/bitwarden-rust-sdk.md~). Тому логін для підключення (~<користувач>@<IPv4>~, напр.
+~azureuser@52.188.198.115~ — лише ~IPv4~, без ~FQDN~/~IPv6~/кількох адрес, за домовленістю з ~it-manage~)
+зберігається як звичайне користувацьке поле ~fields[]~ з іменем ~"login"~, але структуровано (=bwm-mcp=
+сам його пише/читає/валідує), а не як довільне поле, віддане на розсуд
+агента. ~get~/~create~/~edit~/~rotate_secret~ виносять це поле окремим ключем верхнього рівня ~login~ у
+відповіді — не всередині загального ~fields~. Для ~list~ це структурно неможливо: ~CipherListView~ (на
+відміну від повного ~CipherView~) взагалі не має поля ~fields~ — тож ~list~ логін не показує; пошук на
+кшталт "усі входи на 127.0.0.1" через ~list~ не працює, споживач мусить сам дістати й відфільтрувати
+елементи через ~get~.
+
+#+begin_src rust :noweb-ref Визначення
+  fn ssh_login(value: &str) -> Result<String, String> {
+      let (_user, host) = value
+          .split_once('@')
+          .filter(|(user, _)| !user.is_empty())
+          .ok_or("sshKey.login: очікується формат <користувач>@<IPv4>.".to_string())?;
+
+      let octets: Vec<&str> = host.split('.').collect();
+      let ipv4 = octets.len() == 4 && octets.iter().all(|octet| octet.parse::<u8>().is_ok());
+
+      if !ipv4 {
+          return Err("sshKey.login: <IPv4> — чотири числа 0-255 через крапку, без FQDN/IPv6.".to_string());
+      }
+
+      Ok(value.to_string())
+  }
+
+  fn login_field(login: String) -> FieldView {
+      FieldView { name: Some("login".to_string()), value: Some(login), r#type: FieldType::Text, linked_id: None }
+  }
+
+  fn promote_login(value: &mut serde_json::Value) {
+      let Some(fields) = value.get_mut("fields").and_then(|fields| fields.as_array_mut()) else { return };
+
+      if let Some(index) = fields.iter().position(|field| field["name"].as_str() == Some("login")) {
+          let field = fields.remove(index);
+          value["login"] = field["value"].clone();
+      }
+  }
+#+end_src
+
 * Отримання
 
 #+begin_src rust :noweb-ref Декларації
@@ -76,6 +121,7 @@
       let id = item_id(arguments)?;
       let view = bw.vault().ciphers().get(&id).await.map_err(|error| error.to_string())?;
       let mut value = serde_json::to_value(&view).unwrap();
+      promote_login(&mut value);
       redact(&mut value);
 
       Ok(value.to_string())
@@ -84,12 +130,12 @@
 
 * Перелік
 
-Відповідь — обʼєкт ~{ items, failures }~: ~items~ — успішно розшифровані елементи (~successes~), ~failures~
-— лише ~id~, ~type~ і ~folderId~ елементів, які SDK не зміг розшифрувати чи розібрати (вміст зашифрований і
-не повертається). Раніше такі елементи мовчки відкидались — так зникали елементи типу ~5~ (=ssh key=).
-Фільтри ~name~/~folderId~ застосовуються лише до ~items~. ~CipherListView~ і так
-не має поля ~password~ (перевірено рядком-у-рядок з ~cargo doc~, див.
-~spcfctn/code/bitwarden-rust-sdk.md~), але ~totp~ там є — тож ~redact~ однаково потрібен.
+Відповідь — обʼєкт ~{ items, failures }~: ~items~ — успішно розшифровані елементи (~successes~),
+~failures~ — лише ~id~, ~type~ і ~folderId~ елементів, які SDK не зміг розшифрувати чи розібрати (вміст
+зашифрований і не повертається). Раніше такі елементи мовчки відкидались — так зникали елементи типу ~5~
+(=ssh key=).  Фільтри ~name~/~folderId~ застосовуються лише до ~items~. ~CipherListView~ і так не має
+поля ~password~ (перевірено рядком-у-рядок з ~cargo doc~, див.  ~spcfctn/code/bitwarden-rust-sdk.md~),
+але ~totp~ там є — тож ~redact~ однаково потрібен.
 
 #+begin_src rust :noweb-ref Визначення
   async fn list(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
@@ -139,8 +185,8 @@
 * Створення
 
 Підтримано три типи — ~login~ (~type: 1~), ~secureNote~ (~type: 2~) і =ssh key= (~type: 5~) — той самий
-набір значень, що й у офіційному сервері. ~card~ / ~identity~ не підтримано: аргумент ~type~ поза
-~{1, 2, 5}~ дає зрозумілу помилку, а не незрозумілий збій десь глибше в ~CipherViewType~.
+набір значень, що й у офіційному сервері. ~card~ / ~identity~ не підтримано: аргумент ~type~ поза ~{1, 2,
+5}~ дає зрозумілу помилку, а не незрозумілий збій десь глибше в ~CipherViewType~.
 
 Ключ =ssh= (~type: 5~) завжди генерується самим ~bwm-mcp~ (~bitwarden_ssh::generator::generate_sshkey~,
 алгоритм ~sshKey.algorithm~, типово ~ed25519~) і одразу йде в елемент: приватна частина не передається
@@ -148,15 +194,18 @@
 
 Агент не може передати готове значення ~login.password~ (і взагалі не може ~login.totp~ — генератора
 ~totp~-секрету в =SDK= немає, на відміну від пароля): єдиний спосіб отримати пароль при створенні —
-попросити ~bwm-mcp~ згенерувати його самому (~login.generatePassword~), і сам згенерований пароль
-назад не повертається (той самий ~redact~, що й для ~get~).
+попросити ~bwm-mcp~ згенерувати його самому (~login.generatePassword~), і сам згенерований пароль назад
+не повертається (той самий ~redact~, що й для ~get~).
+
+Для =ssh key= (~type: 5~) додатково обов'язковий ~sshKey.login~ (~<користувач>@<IPv4>~, див. розділ вище)
+— без нього ~create~ відмовляє, а не створює елемент без прив'язки до конкретного хоста.
 
 #+begin_src rust :noweb-ref Декларації
   use bitwarden_generators::{GeneratorClientsExt, PasswordGeneratorRequest};
   use bitwarden_ssh::generator::{generate_sshkey, KeyAlgorithm};
   use bitwarden_vault::{
-      CipherCreateRequest, CipherRepromptType, CipherViewType, LoginUriView, LoginView,
-      SecureNoteType, SecureNoteView, SshKeyView, UriMatchType,
+      CipherCreateRequest, CipherRepromptType, CipherViewType, FieldType, FieldView, LoginUriView,
+      LoginView, SecureNoteType, SecureNoteView, SshKeyView, UriMatchType,
   };
 #+end_src
 
@@ -260,6 +309,17 @@
           None => None,
       };
 
+      let fields = match &r#type {
+          CipherViewType::SshKey(_) => {
+              let login = arguments["sshKey"]["login"]
+                  .as_str()
+                  .ok_or("Потрібен аргумент sshKey.login (<користувач>@<IPv4>).".to_string())?;
+
+              vec![login_field(ssh_login(login)?)]
+          }
+          _ => vec![],
+      };
+
       let request = CipherCreateRequest {
           organization_id: None,
           collection_ids: vec![],
@@ -269,12 +329,13 @@
           favorite: false,
           reprompt: CipherRepromptType::default(),
           r#type,
-          fields: vec![],
+          fields,
           archived_date: None,
       };
 
       let created = bw.vault().ciphers().create(request).await.map_err(|error| error.to_string())?;
       let mut value = serde_json::to_value(&created).unwrap();
+      promote_login(&mut value);
       redact(&mut value);
 
       Ok(value.to_string())
@@ -283,10 +344,11 @@
 
 * Редагування
 
-Спершу отримуємо поточний повний обʼєкт і перетворюємо на ~CipherEditRequest~
-(~TryFrom<CipherView>~) — так усі поля (~login~, ~fields~, ~attachments~ тощо) лишаються як є, крім
-тих, що прийшли в аргументах явно. Поки підтримано лише ~folderId~ / ~name~ / ~notes~ — ~login~ /
-~card~ / ~identity~ додамо, коли з'явиться реальна потреба редагувати саме їх.
+Спершу отримуємо поточний повний обʼєкт і перетворюємо на ~CipherEditRequest~ (~TryFrom<CipherView>~) —
+так усі поля (~login~, ~fields~, ~attachments~ тощо) лишаються як є, крім тих, що прийшли в аргументах
+явно. З типового ~login~/~card~/~identity~ поки підтримано лише ~folderId~/~name~/~notes~ — додамо решту,
+коли з'явиться реальна потреба. Виняток — ~sshKey.login~ (розділ вище): опціональний, але коли переданий,
+справді замінює збережене значення (валідація тим самим форматом, що й при ~create~).
 
 #+begin_src rust :noweb-ref Декларації
   use bitwarden_vault::CipherEditRequest;
@@ -307,9 +369,15 @@
       if let Some(notes) = arguments["notes"].as_str() {
           request.notes = Some(notes.to_string());
       }
+      if let Some(login) = arguments["sshKey"]["login"].as_str() {
+          let login = ssh_login(login)?;
+          request.fields.retain(|field| field.name.as_deref() != Some("login"));
+          request.fields.push(login_field(login));
+      }
 
       let updated = bw.vault().ciphers().edit(request).await.map_err(|error| error.to_string())?;
       let mut value = serde_json::to_value(&updated).unwrap();
+      promote_login(&mut value);
       redact(&mut value);
 
       Ok(value.to_string())
@@ -318,13 +386,40 @@
 
 * Ротація секрету
 
-Єдина дія, що встановлює нове значення ~login.password~/~login.totp~ — навмисно окрема від
-звичайного ~edit~ (не додає ~login~ у його аргументи), щоб пізніше її можна було обмежити окремим
-правилом (без ризику зачепити звичайне редагування ~folderId~/~name~/~notes~). На відміну від решти
-дій, відповідь для ~login~ тут ~redact~ не проходить — покликач сам щойно передав ці значення,
-приховувати нічого. Для елемента =ssh key= (~type: 5~) ротація — повторна генерація ключа всередині
-~bwm-mcp~ (~secret.algorithm~, типово ~ed25519~): агент нового ключа не бачив, тож відповідь ~redact~
-проходить, приватної частини в ній нема.
+Єдина дія, що встановлює нове значення ~login.password~/~login.totp~ — навмисно окрема від звичайного
+~edit~ (не додає ~login~ у його аргументи), щоб пізніше її можна було обмежити окремим правилом (без
+ризику зачепити звичайне редагування ~folderId~/~name~/~notes~). Для елемента =ssh key= (~type: 5~)
+ротація — повторна генерація ключа всередині ~bwm-mcp~ (~secret.algorithm~, типово ~ed25519~): агент
+нового ключа не бачив, тож відповідь ~redact~ проходить, приватної частини в ній нема.
+
+Для ~login~ — два незалежні способи задати новий пароль: ~secret.password~ (готове значення, покликач
+сам щойно передав його — відповідь для ~password~ тоді НЕ приховується, приховувати нічого) і
+~secret.generatePassword: true~ (генерація на боці сервера з тими самими опціями, що в інструменті
+~generate~ — ~length~/~lowercase~/~uppercase~/~number~/~special~, нижче в
+[[file:main-tools.org][~main-tools.org~]]) — агент тоді значення не бачив узагалі, тож саме ~password~ приховується в
+відповіді, хоч решта поля лишається (ціль — замінити секрет "на місці", без витоку нового значення в
+контекст агента і без створення другої картки). Обидва разом — помилка. ~secret.totp~ лишається лише
+явним значенням: генератора =totp=-секрету в =SDK= немає (див. [[file:config.org][~config.org~]]), тож
+"~generateTotp~" поки неможливий.
+
+#+begin_src rust :noweb-ref Декларації
+  fn password_request(options: &serde_json::Value) -> PasswordGeneratorRequest {
+      PasswordGeneratorRequest {
+          lowercase: options["lowercase"].as_bool().unwrap_or(false),
+          uppercase: options["uppercase"].as_bool().unwrap_or(false),
+          numbers: options["number"].as_bool().unwrap_or(false),
+          special: options["special"].as_bool().unwrap_or(false),
+          length: options["length"].as_u64().unwrap_or(20) as u8,
+          ..Default::default()
+      }
+  }
+
+  fn redact_password(value: &mut serde_json::Value) {
+      if let Some(login) = value.get_mut("login").and_then(|login| login.as_object_mut()) {
+          login.remove("password");
+      }
+  }
+#+end_src
 
 #+begin_src rust :noweb-ref Визначення
   async fn rotate_secret(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
@@ -333,9 +428,10 @@
       let mut request = CipherEditRequest::try_from(view).map_err(|error| error.to_string())?;
 
       if let CipherViewType::SshKey(key) = &mut request.r#type {
-          *key = generate_key(arguments["secret"]["algorithm"].as_str())?;
+          ,*key = generate_key(arguments["secret"]["algorithm"].as_str())?;
           let updated = bw.vault().ciphers().edit(request).await.map_err(|error| error.to_string())?;
           let mut value = serde_json::to_value(&updated).unwrap();
+          promote_login(&mut value);
           redact(&mut value);
 
           return Ok(value.to_string());
@@ -346,21 +442,68 @@
       };
 
       let password = arguments["secret"]["password"].as_str();
+      let generate = arguments["secret"]["generatePassword"].as_bool().unwrap_or(false);
       let totp = arguments["secret"]["totp"].as_str();
 
-      if password.is_none() && totp.is_none() {
-          return Err("Потрібен хоча б secret.password чи secret.totp.".to_string());
+      if password.is_some() && generate {
+          return Err("secret.password і secret.generatePassword взаємовиключні.".to_string());
+      }
+      if password.is_none() && !generate && totp.is_none() {
+          return Err("Потрібен хоча б secret.password, secret.generatePassword чи secret.totp.".to_string());
       }
       if let Some(password) = password {
           login.password = Some(password.to_string());
+      }
+      if generate {
+          let request = password_request(&arguments["secret"]);
+          login.password = Some(bw.generator().password(request).map_err(|error| error.to_string())?);
       }
       if let Some(totp) = totp {
           login.totp = Some(totp.to_string());
       }
 
       let updated = bw.vault().ciphers().edit(request).await.map_err(|error| error.to_string())?;
+      let mut value = serde_json::to_value(&updated).unwrap();
+      promote_login(&mut value);
 
-      Ok(serde_json::to_string(&updated).unwrap())
+      if generate {
+          redact_password(&mut value);
+      }
+
+      Ok(value.to_string())
+  }
+#+end_src
+
+* Кошик
+
+~soft_delete~/~restore~ (крейт ~bitwarden-vault~, перевірено ~cargo doc~) — м'яке видалення: елемент іде в
+кошик, не зникає назавжди, і його можна повернути. Повне (``delete``/``delete_many``) свідомо не
+підключено — немає підтвердженого сценарію, що потребує саме незворотного видалення, а ризик вищий.
+
+#+begin_src rust :noweb-ref Декларації
+  use bitwarden_vault::CipherId;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  fn cipher_id(id: &str) -> Result<CipherId, String> {
+      id.parse().map_err(|_| "Некоректний id.".to_string())
+  }
+
+  async fn delete(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
+      let id = cipher_id(&item_id(arguments)?)?;
+      bw.vault().ciphers().soft_delete(id).await.map_err(|error| error.to_string())?;
+
+      Ok("Перенесено в кошик.".to_string())
+  }
+
+  async fn restore(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
+      let id = cipher_id(&item_id(arguments)?)?;
+      let restored = bw.vault().ciphers().restore(id).await.map_err(|error| error.to_string())?;
+      let mut value = serde_json::to_value(&restored).unwrap();
+      promote_login(&mut value);
+      redact(&mut value);
+
+      Ok(value.to_string())
   }
 #+end_src
 
@@ -379,7 +522,9 @@
           Some("create") => create(bw, arguments).await,
           Some("edit") => edit(bw, arguments).await,
           Some("rotate_secret") => rotate_secret(bw, arguments).await,
-          _ => Err("Потрібен аргумент action: list/get/create/edit/rotate_secret/sync.".to_string()),
+          Some("delete") => delete(bw, arguments).await,
+          Some("restore") => restore(bw, arguments).await,
+          _ => Err("Потрібен аргумент action: list/get/create/edit/rotate_secret/delete/restore/sync.".to_string()),
       };
 
       reply(result)

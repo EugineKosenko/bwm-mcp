@@ -1,0 +1,40 @@
+#+title: Локальний unlock
+
+Звичайний старт сервера ([[file:main.org][main.org]], ~client::connect~) не логіниться мережево — лише відновлює вже
+наявний стан ([[file:state.org][state.org]], [[file:login.org][login.org]]) і розблоковує криптостан ~SessionKey~-ом, повністю локально:
+жодного звернення до ~identity~-ендпоінту, тож структурно імунно до
+~LOGIN_RATELIMIT_MAX_BURST~/~SECONDS~ — саме це й усуває клас помилки ~429~, на яку натикались повторні
+~/mcp reconnect~. Той самий рецепт, що й ~bwm-bwx~
+([[file:/home/eugine/job/personal/bw-mcp/code/bwm-bwx/unlock.org][unlock.org]]).
+
+#+begin_src rust :noweb yes :tangle src/unlock.rs
+  <<Декларації>>
+
+  <<Визначення>>
+#+end_src
+
+* Декларації
+
+#+begin_src rust :noweb-ref Декларації
+  use crate::client;
+  use crate::state;
+  use bitwarden_unlock::{UnlockClientExt, UnlockMethod};
+#+end_src
+
+* Визначення
+
+#+begin_src rust :noweb-ref Визначення
+  pub async fn unlock(server: &str) -> Result<client::Bw, String> {
+      let bw = client::build(server).await?;
+      let session_key = state::load_session_key(server)?;
+
+      bw.unlock()
+          .unlock(UnlockMethod::SessionKey(session_key))
+          .await
+          .map_err(|error| format!("Не вдалося розблокувати локальний стан: {error}"))?;
+
+      client::sync(&bw, false).await?;
+
+      Ok(bw)
+  }
+#+end_src

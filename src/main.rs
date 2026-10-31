@@ -1,18 +1,58 @@
 mod client;
+mod state;
+mod login;
+mod unlock;
 mod tools;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+fn require_url(command: &str) -> String {
+    std::env::args().nth(2).unwrap_or_else(|| {
+        eprintln!("Потрібен url сервера: bwm-mcp {command} <url>");
+        std::process::exit(1);
+    })
+}
+
 fn print_help() {
     println!("bwm-mcp — MCP-сервер для Bitwarden/Vaultwarden (json-rpc над stdio).");
     println!();
-    println!("Змінні середовища (усі обов'язкові):");
-    println!("  BWM_SERVER   базова адреса Vaultwarden без кінцевого слеша (напр. https://localhost:8443)");
-    println!("  BWM_EMAIL    пошта облікового запису");
-    println!("  BWM_PASSWD   майстер-пароль облікового запису");
+    println!("Використання:");
+    println!("  bwm-mcp                запустити сервер (звичайний режим mcp-клієнта)");
+    println!("  bwm-mcp login <url>    увійти на сервер url (пошта/майстер-пароль інтерактивно), зберегти стан");
+    println!("  bwm-mcp logout <url>   видалити збережений стан (session-key, state.sqlite3) для сервера url");
+    println!();
+    println!("Звичайний старт сервера мережево НЕ логіниться — лише локально розблоковує вже збережений");
+    println!("стан (unlock.org) для сервера з BW_SERVER. Немає збереженого стану для нього — спершу");
+    println!("виконайте `bwm-mcp login <url>` вручну з тим самим url.");
+    println!();
+    println!("Стан окремий на кожен сервер (url) — можна входити на кілька різних Vaultwarden незалежно,");
+    println!("кожен проєкт у власному .mcp.json вказує BW_SERVER того сервера, з яким має працювати.");
+    println!();
+    println!("Змінна середовища (обов'язкова для звичайного старту сервера):");
+    println!("  BW_SERVER   базова адреса Vaultwarden без кінцевого слеша (напр. https://localhost:8443)");
     println!();
     println!("Довіри до самопідписаного сертифіката сервера (TLS) поки не реалізовано (див. env.org) —");
     println!("самопідписаний сертифікат призведе до помилки під час входу.");
+    println!();
+    println!("Локальний стан — ~/.local/share/bwm-mcp/<сервер>/ (state.sqlite3, session-key, права 600),");
+    println!("окремо на кожен url сервера.");
+    println!("Помилка старту додатково пишеться в ~/.local/state/bwm-mcp/last-error.log — mcp-клієнт");
+    println!("(Claude Code) не показує stderr невдалого підключення, лише \"connection closed\".");
+}
+fn log_startup_error(message: &str) {
+    let hint = if message.contains("429") {
+        " Це, найімовірніше, rate-limit входу Vaultwarden \
+          (LOGIN_RATELIMIT_MAX_BURST/LOGIN_RATELIMIT_SECONDS) — часті реконекти вичерпують ліміт."
+    } else {
+        ""
+    };
+
+    let Ok(home) = std::env::var("HOME") else { return };
+    let dir = std::path::Path::new(&home).join(".local/state/bwm-mcp");
+
+    if std::fs::create_dir_all(&dir).is_ok() {
+        let _ = std::fs::write(dir.join("last-error.log"), format!("{message}{hint}\n"));
+    }
 }
 async fn dispatch(bw: Arc<client::Bw>, method: String, params: serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     match method.as_str() {
@@ -50,9 +90,37 @@ async fn main() {
         .with_max_level(tracing_subscriber::filter::LevelFilter::ERROR)
         .init();
     dotenvy::dotenv().ok();
+
+    if std::env::args().nth(1).as_deref() == Some("login") {
+        let server = require_url("login");
+
+        match login::run(&server).await {
+            Ok(message) => println!("{message}"),
+            Err(message) => {
+                eprintln!("{message}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    if std::env::args().nth(1).as_deref() == Some("logout") {
+        let server = require_url("logout");
+
+        match state::logout(&server) {
+            Ok(message) => println!("{message}"),
+            Err(message) => {
+                eprintln!("{message}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     let bw = match client::connect().await {
         Ok(bw) => Arc::new(bw),
         Err(message) => {
+            log_startup_error(&message);
             eprintln!("{}", message);
             std::process::exit(1);
         }

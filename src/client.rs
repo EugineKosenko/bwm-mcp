@@ -1,31 +1,43 @@
 use bitwarden_core::Client;
+use bitwarden_core::client::persisted_state::BaseUrls;
 use bitwarden_core::ClientSettings;
 use std::env;
 use bitwarden_auth::token_management::PasswordManagerTokenHandler;
 use bitwarden_core::ClientBuilder;
+use bitwarden_state::registry::StateRegistry;
 use std::sync::Arc;
+use crate::state;
 use std::error::Error as StdError;
-use bitwarden_core::auth::login::PasswordLoginRequest;
 use bitwarden_core::FromClient;
 use bitwarden_sync::{SyncClientExt, SyncRequest};
 use bitwarden_vault::{CipherSyncHandler, FolderSyncHandler};
+use crate::unlock;
 
 pub type Bw = Client;
+pub fn urls(server: &str) -> BaseUrls {
+    BaseUrls { identity_url: format!("{}/identity", server), api_url: format!("{}/api", server) }
+}
+
 fn settings(server: &str) -> ClientSettings {
+    let BaseUrls { identity_url, api_url } = urls(server);
+
     ClientSettings {
-        identity_url: format!("{}/identity", server),
-        api_url: format!("{}/api", server),
+        identity_url,
+        api_url,
         bitwarden_client_version: Some("2026.6.0".to_string()),
         ..Default::default()
     }
 }
-fn build(server: &str) -> Bw {
-    ClientBuilder::new()
+pub async fn build(server: &str) -> Result<Bw, String> {
+    let registry: StateRegistry = state::registry(server).await?;
+
+    Ok(ClientBuilder::new()
         .with_token_handler(Arc::new(PasswordManagerTokenHandler::default()))
         .with_settings(settings(server))
-        .build()
+        .with_state(registry)
+        .build())
 }
-fn describe(error: &(dyn StdError + 'static)) -> String {
+pub fn describe(error: &(dyn StdError + 'static)) -> String {
     let mut message = error.to_string();
     let mut cause = error.source();
 
@@ -37,22 +49,8 @@ fn describe(error: &(dyn StdError + 'static)) -> String {
 
     message
 }
-fn required(name: &str) -> Result<String, String> {
+pub fn required(name: &str) -> Result<String, String> {
     env::var(name).map_err(|_| format!("Змінну середовища {} не задано (див. .env.example).", name))
-}
-
-async fn login(bw: &Bw, email: String, password: String) -> Result<(), String> {
-    let result = bw
-        .auth()
-        .login_password(&PasswordLoginRequest { email, password, two_factor: None })
-        .await
-        .map_err(|error| format!("Не вдалося увійти в Bitwarden: {}", describe(&error)))?;
-
-    if result.two_factor.is_some() {
-        return Err("Акаунт вимагає двофакторну автентифікацію — bwm-mcp поки її не підтримує.".to_string());
-    }
-
-    Ok(())
 }
 pub async fn sync(bw: &Bw, force: bool) -> Result<(), String> {
     let sync_client = bw.sync();
@@ -67,14 +65,7 @@ pub async fn sync(bw: &Bw, force: bool) -> Result<(), String> {
     Ok(())
 }
 pub async fn connect() -> Result<Bw, String> {
-    let server = required("BWM_SERVER")?;
-    let email = required("BWM_EMAIL")?;
-    let password = required("BWM_PASSWD")?;
+    let server = required("BW_SERVER")?;
 
-    let bw = build(&server);
-
-    login(&bw, email, password).await?;
-    sync(&bw, false).await?;
-
-    Ok(bw)
+    unlock::unlock(&server).await
 }

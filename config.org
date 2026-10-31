@@ -99,10 +99,32 @@
   bitwarden-sync = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
   bitwarden-generators = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
   bitwarden-ssh = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
+  bitwarden-unlock = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010", features = ["cli"] }
+  bitwarden-state = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
+  bitwarden-send = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
 #+end_src
 
 Крейт ~bitwarden-ssh~ — генерація ключів =ssh= (~generate_sshkey~), той самий форк і ~rev~; у графі вже
 був як залежність ~bitwarden-core~.
+
+* Розділення ~login~/~unlock~
+
+Той самий принцип, що й у ~bwm-bwx~ ([[file:/home/eugine/job/personal/bw-mcp/code/bwm-bwx/config.org][config.org]]): мережевий вхід — рідкісна явна дія (команда ~login~, [[file:main.org][main.org]]),
+звичайний старт сервера — лише локальний ~unlock~ ([[file:unlock.org][unlock.org]]), без звернення до
+~LOGIN_RATELIMIT_MAX_BURST~/~SECONDS~. ~bitwarden-unlock~ (фіча ~cli~, та сама, що в реальному ~bw~) дає
+~SessionKey~/~UnlockMethod~; ~bitwarden-state~ — ~StateRegistry~, файлове збереження стану між запусками
+процесу (`state.org`). ~bitwarden-send~ тут не використовується функціонально — потрібен лише заради типу
+~Send~ для повного переліку міграцій ~StateRegistry~, того самого, що й в офіційному
+~bitwarden-pm::migrations::get_sdk_managed_migrations()~. Стан — власний каталог
+~~/.local/share/bwm-mcp/~, окремий від ~bwm-bwx~ (рішення користувача: конкурентний доступ до одного
+~state.sqlite3~ з довгоживучого ~bwm-mcp~ і одноразових викликів ~bwm-bwx~ — зайвий ризик).
+
+#+begin_src toml :noweb-ref Залежності
+  rpassword = "*"
+#+end_src
+
+~rpassword~ — інтерактивне зчитування майстер-пароля з ~stdin~ без відлуння, лише для команди ~login~
+(`login.org`); ніде не зберігається.
 
 * Спільний диск для ~target/~
 

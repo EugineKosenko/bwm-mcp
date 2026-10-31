@@ -3,10 +3,27 @@ use bitwarden_vault::VaultClientExt;
 use bitwarden_generators::{GeneratorClientsExt, PasswordGeneratorRequest};
 use bitwarden_ssh::generator::{generate_sshkey, KeyAlgorithm};
 use bitwarden_vault::{
-    CipherCreateRequest, CipherRepromptType, CipherViewType, LoginUriView, LoginView,
-    SecureNoteType, SecureNoteView, SshKeyView, UriMatchType,
+    CipherCreateRequest, CipherRepromptType, CipherViewType, FieldType, FieldView, LoginUriView,
+    LoginView, SecureNoteType, SecureNoteView, SshKeyView, UriMatchType,
 };
 use bitwarden_vault::CipherEditRequest;
+fn password_request(options: &serde_json::Value) -> PasswordGeneratorRequest {
+    PasswordGeneratorRequest {
+        lowercase: options["lowercase"].as_bool().unwrap_or(false),
+        uppercase: options["uppercase"].as_bool().unwrap_or(false),
+        numbers: options["number"].as_bool().unwrap_or(false),
+        special: options["special"].as_bool().unwrap_or(false),
+        length: options["length"].as_u64().unwrap_or(20) as u8,
+        ..Default::default()
+    }
+}
+
+fn redact_password(value: &mut serde_json::Value) {
+    if let Some(login) = value.get_mut("login").and_then(|login| login.as_object_mut()) {
+        login.remove("password");
+    }
+}
+use bitwarden_vault::CipherId;
 use crate::tools::reply;
 
 fn item_id(arguments: &serde_json::Value) -> Result<String, String> {
@@ -31,10 +48,39 @@ fn redact(value: &mut serde_json::Value) {
         _ => {}
     }
 }
+fn ssh_login(value: &str) -> Result<String, String> {
+    let (_user, host) = value
+        .split_once('@')
+        .filter(|(user, _)| !user.is_empty())
+        .ok_or("sshKey.login: очікується формат <користувач>@<IPv4>.".to_string())?;
+
+    let octets: Vec<&str> = host.split('.').collect();
+    let ipv4 = octets.len() == 4 && octets.iter().all(|octet| octet.parse::<u8>().is_ok());
+
+    if !ipv4 {
+        return Err("sshKey.login: <IPv4> — чотири числа 0-255 через крапку, без FQDN/IPv6.".to_string());
+    }
+
+    Ok(value.to_string())
+}
+
+fn login_field(login: String) -> FieldView {
+    FieldView { name: Some("login".to_string()), value: Some(login), r#type: FieldType::Text, linked_id: None }
+}
+
+fn promote_login(value: &mut serde_json::Value) {
+    let Some(fields) = value.get_mut("fields").and_then(|fields| fields.as_array_mut()) else { return };
+
+    if let Some(index) = fields.iter().position(|field| field["name"].as_str() == Some("login")) {
+        let field = fields.remove(index);
+        value["login"] = field["value"].clone();
+    }
+}
 async fn get(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
     let id = item_id(arguments)?;
     let view = bw.vault().ciphers().get(&id).await.map_err(|error| error.to_string())?;
     let mut value = serde_json::to_value(&view).unwrap();
+    promote_login(&mut value);
     redact(&mut value);
 
     Ok(value.to_string())
@@ -166,6 +212,17 @@ async fn create(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String
         None => None,
     };
 
+    let fields = match &r#type {
+        CipherViewType::SshKey(_) => {
+            let login = arguments["sshKey"]["login"]
+                .as_str()
+                .ok_or("Потрібен аргумент sshKey.login (<користувач>@<IPv4>).".to_string())?;
+
+            vec![login_field(ssh_login(login)?)]
+        }
+        _ => vec![],
+    };
+
     let request = CipherCreateRequest {
         organization_id: None,
         collection_ids: vec![],
@@ -175,12 +232,13 @@ async fn create(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String
         favorite: false,
         reprompt: CipherRepromptType::default(),
         r#type,
-        fields: vec![],
+        fields,
         archived_date: None,
     };
 
     let created = bw.vault().ciphers().create(request).await.map_err(|error| error.to_string())?;
     let mut value = serde_json::to_value(&created).unwrap();
+    promote_login(&mut value);
     redact(&mut value);
 
     Ok(value.to_string())
@@ -199,9 +257,15 @@ async fn edit(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, 
     if let Some(notes) = arguments["notes"].as_str() {
         request.notes = Some(notes.to_string());
     }
+    if let Some(login) = arguments["sshKey"]["login"].as_str() {
+        let login = ssh_login(login)?;
+        request.fields.retain(|field| field.name.as_deref() != Some("login"));
+        request.fields.push(login_field(login));
+    }
 
     let updated = bw.vault().ciphers().edit(request).await.map_err(|error| error.to_string())?;
     let mut value = serde_json::to_value(&updated).unwrap();
+    promote_login(&mut value);
     redact(&mut value);
 
     Ok(value.to_string())
@@ -215,6 +279,7 @@ async fn rotate_secret(bw: &client::Bw, arguments: &serde_json::Value) -> Result
         *key = generate_key(arguments["secret"]["algorithm"].as_str())?;
         let updated = bw.vault().ciphers().edit(request).await.map_err(|error| error.to_string())?;
         let mut value = serde_json::to_value(&updated).unwrap();
+        promote_login(&mut value);
         redact(&mut value);
 
         return Ok(value.to_string());
@@ -225,21 +290,55 @@ async fn rotate_secret(bw: &client::Bw, arguments: &serde_json::Value) -> Result
     };
 
     let password = arguments["secret"]["password"].as_str();
+    let generate = arguments["secret"]["generatePassword"].as_bool().unwrap_or(false);
     let totp = arguments["secret"]["totp"].as_str();
 
-    if password.is_none() && totp.is_none() {
-        return Err("Потрібен хоча б secret.password чи secret.totp.".to_string());
+    if password.is_some() && generate {
+        return Err("secret.password і secret.generatePassword взаємовиключні.".to_string());
+    }
+    if password.is_none() && !generate && totp.is_none() {
+        return Err("Потрібен хоча б secret.password, secret.generatePassword чи secret.totp.".to_string());
     }
     if let Some(password) = password {
         login.password = Some(password.to_string());
+    }
+    if generate {
+        let request = password_request(&arguments["secret"]);
+        login.password = Some(bw.generator().password(request).map_err(|error| error.to_string())?);
     }
     if let Some(totp) = totp {
         login.totp = Some(totp.to_string());
     }
 
     let updated = bw.vault().ciphers().edit(request).await.map_err(|error| error.to_string())?;
+    let mut value = serde_json::to_value(&updated).unwrap();
+    promote_login(&mut value);
 
-    Ok(serde_json::to_string(&updated).unwrap())
+    if generate {
+        redact_password(&mut value);
+    }
+
+    Ok(value.to_string())
+}
+fn cipher_id(id: &str) -> Result<CipherId, String> {
+    id.parse().map_err(|_| "Некоректний id.".to_string())
+}
+
+async fn delete(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
+    let id = cipher_id(&item_id(arguments)?)?;
+    bw.vault().ciphers().soft_delete(id).await.map_err(|error| error.to_string())?;
+
+    Ok("Перенесено в кошик.".to_string())
+}
+
+async fn restore(bw: &client::Bw, arguments: &serde_json::Value) -> Result<String, String> {
+    let id = cipher_id(&item_id(arguments)?)?;
+    let restored = bw.vault().ciphers().restore(id).await.map_err(|error| error.to_string())?;
+    let mut value = serde_json::to_value(&restored).unwrap();
+    promote_login(&mut value);
+    redact(&mut value);
+
+    Ok(value.to_string())
 }
 pub async fn run(bw: &client::Bw, arguments: &serde_json::Value) -> serde_json::Value {
     let result = match arguments["action"].as_str() {
@@ -249,7 +348,9 @@ pub async fn run(bw: &client::Bw, arguments: &serde_json::Value) -> serde_json::
         Some("create") => create(bw, arguments).await,
         Some("edit") => edit(bw, arguments).await,
         Some("rotate_secret") => rotate_secret(bw, arguments).await,
-        _ => Err("Потрібен аргумент action: list/get/create/edit/rotate_secret/sync.".to_string()),
+        Some("delete") => delete(bw, arguments).await,
+        Some("restore") => restore(bw, arguments).await,
+        _ => Err("Потрібен аргумент action: list/get/create/edit/rotate_secret/delete/restore/sync.".to_string()),
     };
 
     reply(result)

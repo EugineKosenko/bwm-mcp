@@ -123,12 +123,12 @@
 #+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Опис
   {
       "name": "items",
-      "description": "Робота з елементами сейфа, без прямого доступу до секретів (password, totp, sshKey.privateKey не повертаються): list (елементи; необовʼязкові фільтри name — підрядок, folderId), sync (повторна синхронізація з сервером — елементи, створені деінде після старту, інакше не видно), get (обʼєкт за id), create (login, secureNote чи sshKey, потрібні name і type; пароль лише через login.generatePassword, ключ ssh для type=5 генерується самим сервером — готове значення передати не можна), edit (змінити folderId/name/notes, login не чіпає), rotate_secret (єдина дія, що встановлює нове secret.password/secret.totp для login або перегенеровує ключ для sshKey — сценарій ротації).",
+      "description": "Робота з елементами сейфа, без прямого доступу до секретів (password, totp, sshKey.privateKey не повертаються): list (елементи; необовʼязкові фільтри name — підрядок, folderId; для sshKey login у відповіді не показується — CipherListView структурно не має fields, лише get), sync (повторна синхронізація з сервером — елементи, створені деінде після старту, інакше не видно), get (обʼєкт за id; для sshKey — окреме поле login), create (login, secureNote чи sshKey, потрібні name і type; пароль лише через login.generatePassword, ключ ssh для type=5 генерується самим сервером — готове значення передати не можна; для sshKey додатково обовʼязковий sshKey.login), edit (змінити folderId/name/notes; для sshKey — sshKey.login опціонально оновлює збережений логін, не чіпає сам ключ), rotate_secret (єдина дія, що встановлює нове значення секрету для login чи sshKey, ротація на місці без другої картки: secret.password — готове значення, caller сам щойно передав його, не приховується; secret.generatePassword — генерація на сервері з опціями length/lowercase/uppercase/number/special, значення не повертається; secret.totp — лише готове значення, генератора totp в SDK нема; для sshKey — secret.algorithm перегенеровує ключ), delete (м'яко — у кошик, не назавжди), restore (повернути з кошика за id).",
       "inputSchema": {
           "type": "object",
           "properties": {
-              "action": { "type": "string", "enum": ["list", "get", "create", "edit", "rotate_secret", "sync"] },
-              "id": { "type": "string", "description": "ID елемента (для get/edit/rotate_secret)" },
+              "action": { "type": "string", "enum": ["list", "get", "create", "edit", "rotate_secret", "delete", "restore", "sync"] },
+              "id": { "type": "string", "description": "ID елемента (для get/edit/rotate_secret/delete/restore)" },
               "type": { "type": "integer", "enum": [1, 2, 5], "description": "1 — login, 2 — secureNote, 5 — sshKey: ключ генерується самим сервером, приватна частина не повертається (для create)" },
               "name": { "type": "string", "description": "Назва (для create/edit); для list — підрядок назви без урахування регістру" },
               "notes": { "type": "string", "description": "Нотатки (для create/edit)" },
@@ -153,16 +153,23 @@
               },
               "sshKey": {
                   "type": "object",
-                  "description": "Для type=5 при create",
+                  "description": "Для type=5 (sshKey)",
                   "properties": {
-                      "algorithm": { "type": "string", "enum": ["ed25519", "rsa3072", "rsa4096", "ecdsap256", "ecdsap384", "ecdsap521"], "description": "Типово ed25519" }
+                      "algorithm": { "type": "string", "enum": ["ed25519", "rsa3072", "rsa4096", "ecdsap256", "ecdsap384", "ecdsap521"], "description": "Типово ed25519 (лише create)" },
+                      "login": { "type": "string", "description": "Формат <користувач>@<IPv4> (лише IPv4, без FQDN/IPv6/кількох адрес); обовʼязковий при create, опціональний при edit (оновлює збережене значення)" }
                   }
               },
               "secret": {
                   "type": "object",
-                  "description": "Лише для rotate_secret: для login — нові password/totp (принаймні одне); для sshKey — algorithm (ключ генерується наново, значення не повертається)",
+                  "description": "Лише для rotate_secret: для login — password (готове значення) або generatePassword (генерація на сервері, значення не повертається, взаємовиключне з password) і/чи totp; для sshKey — algorithm (ключ генерується наново, значення не повертається)",
                   "properties": {
-                      "password": { "type": "string" },
+                      "password": { "type": "string", "description": "Готове значення пароля — caller сам щойно передав його, у відповіді не приховується" },
+                      "generatePassword": { "type": "boolean", "description": "Згенерувати пароль на сервері; значення не повертається у відповіді; взаємовиключне з password" },
+                      "length": { "type": "integer", "minimum": 5, "description": "Довжина пароля (лише з generatePassword)" },
+                      "lowercase": { "type": "boolean", "description": "Лише з generatePassword" },
+                      "uppercase": { "type": "boolean", "description": "Лише з generatePassword" },
+                      "number": { "type": "boolean", "description": "Лише з generatePassword" },
+                      "special": { "type": "boolean", "description": "Лише з generatePassword" },
                       "totp": { "type": "string" },
                       "algorithm": { "type": "string", "enum": ["ed25519", "rsa3072", "rsa4096", "ecdsap256", "ecdsap384", "ecdsap521"] }
                   }

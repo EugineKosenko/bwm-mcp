@@ -14,3 +14,7 @@ bitwarden-auth = { git = "https://github.com/EugineKosenko/sdk-internal", rev = 
 bitwarden-sync = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
 bitwarden-generators = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
 bitwarden-ssh = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
+bitwarden-unlock = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010", features = ["cli"] }
+bitwarden-state = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
+bitwarden-send = { git = "https://github.com/EugineKosenko/sdk-internal", rev = "5749863cd82572c4ccf91faa90a769e3f91e2010" }
+rpassword = "*"

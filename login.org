@@ -1,0 +1,106 @@
+#+title: Вхід
+
+Єдине місце у ~bwm-mcp~, де відбувається мережевий ~login_password~ — рідкісна, свідома дія людини
+([[file:main.org][main.org]]), не неявний крок перед кожним стартом сервера. Запускається вручну в терміналі користувача
+(``bwm-mcp login <url>``) — не =mcp=-клієнтом (Claude Code) і не з коду жодної сесії: інтерактивні
+підказки пошти й пароля не мають сенсу всередині протоколу =json-rpc=/~stdio~. ~url~ сервера — явний
+аргумент команди, не з ~.env~/оточення: стан тепер окремий на кожен сервер ([[file:state.org][~state.org~]]), тож
+~login~ має знати, в який саме підкаталог стану писати, незалежно від того, яке ~BW_SERVER~ (якщо
+взагалі) є в поточному ~.env~. Пошта й майстер-пароль зчитуються інтерактивно зі ~stdin~ (українською —
+мова прози проєкту, [[file:~/.claude/rules/project-meta.md][project-meta.md]]) і ніде не зберігаються — ні в ~.env~, ні на диску; зберігається лише
+результат ([[file:state.org][state.org]]): реєстр стану =SDK= і окремий ~SessionKey~, обидва в підкаталозі саме цього
+~url~. Той самий рецепт, що й ~bwm-bwx~
+([[file:/home/eugine/job/personal/bw-mcp/code/bwm-bwx/login.org][login.org]]), яка поки лишається на один спільний сервер.
+
+#+begin_src rust :noweb yes :tangle src/login.rs
+  <<Декларації>>
+
+  <<Визначення>>
+#+end_src
+
+* Декларації
+
+#+begin_src rust :noweb-ref Декларації
+  use crate::client;
+  use crate::state;
+  use bitwarden_core::auth::JwtToken;
+  use bitwarden_core::auth::login::PasswordLoginRequest;
+  use bitwarden_core::client::persisted_state::AUTHENTICATION_TOKENS;
+  use bitwarden_core::UserId;
+  use bitwarden_unlock::UnlockClientExt;
+  use std::io::Write;
+#+end_src
+
+* Визначення
+
+#+begin_src rust :noweb-ref Визначення
+  fn prompt_email() -> Result<String, String> {
+      print!("Пошта: ");
+      std::io::stdout().flush().map_err(|e| format!("не вдалося вивести підказку: {e}"))?;
+
+      let mut line = String::new();
+      std::io::stdin().read_line(&mut line).map_err(|e| format!("не вдалося прочитати email: {e}"))?;
+
+      Ok(line.trim().to_string())
+  }
+
+  pub async fn run(server: &str) -> Result<String, String> {
+      let email = prompt_email()?;
+      let password = rpassword::prompt_password("Майстер-пароль: ")
+          .map_err(|e| format!("не вдалося прочитати пароль: {e}"))?;
+
+      let bw = client::build(server).await?;
+
+      let result = bw
+          .auth()
+          .login_password(&PasswordLoginRequest { email: email.clone(), password, two_factor: None })
+          .await
+          .map_err(|error| format!("Не вдалося увійти в Bitwarden: {}", client::describe(&error)))?;
+
+      if result.two_factor.is_some() {
+          return Err("Акаунт вимагає двофакторну автентифікацію — bwm-mcp поки її не підтримує.".to_string());
+      }
+
+      client::sync(&bw, false).await?;
+
+      let user_id = user_id(&bw).await?;
+      state::save(&bw, user_id, email, server).await?;
+
+      let session_key = bw
+          .unlock()
+          .generate_session_key()
+          .await
+          .map_err(|error| format!("Не вдалося створити сесійний ключ: {error}"))?;
+
+      state::save_session_key(server, &session_key)?;
+
+      Ok("Вхід виконано.".to_string())
+  }
+#+end_src
+
+* Ідентифікатор користувача
+
+Той самий спосіб, що й у реальному ~bw~ (`crates/bw/src/main.rs` форку) і в ~bwm-bwx~
+([[file:/home/eugine/job/personal/bw-mcp/code/bwm-bwx/login.org][login.org]]): беремо з ~claim sub~ уже виданого ~access_token~, а не з
+~bw.internal.get_user_id()~ (на цьому шляху не завжди заповнений одразу після ~login_password~).
+
+#+begin_src rust :noweb-ref Визначення
+  async fn user_id(bw: &client::Bw) -> Result<UserId, String> {
+      let tokens = bw
+          .platform()
+          .state()
+          .setting(AUTHENTICATION_TOKENS)
+          .map_err(|e| format!("не вдалося прочитати токени входу: {e}"))?
+          .get()
+          .await
+          .map_err(|e| format!("не вдалося прочитати токени входу: {e}"))?
+          .ok_or("вхід не зберіг токени автентифікації".to_string())?;
+
+      let claims: JwtToken = tokens
+          .access_token
+          .parse()
+          .map_err(|e| format!("не вдалося розібрати токен доступу: {e}"))?;
+
+      claims.sub.parse().map_err(|_| "не вдалося розібрати ідентифікатор користувача".to_string())
+  }
+#+end_src
