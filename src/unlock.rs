@@ -3,7 +3,7 @@ use crate::state;
 use bitwarden_unlock::{UnlockClientExt, UnlockMethod};
 
 pub async fn unlock(server: &str) -> Result<client::Bw, String> {
-    let bw = client::build(server).await?;
+    let bw = client::load(server).await?;
     let session_key = state::load_session_key(server)?;
 
     bw.unlock()

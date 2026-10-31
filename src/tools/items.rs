@@ -17,12 +17,6 @@ fn password_request(options: &serde_json::Value) -> PasswordGeneratorRequest {
         ..Default::default()
     }
 }
-
-fn redact_password(value: &mut serde_json::Value) {
-    if let Some(login) = value.get_mut("login").and_then(|login| login.as_object_mut()) {
-        login.remove("password");
-    }
-}
 use bitwarden_vault::CipherId;
 use crate::tools::reply;
 
@@ -313,9 +307,13 @@ async fn rotate_secret(bw: &client::Bw, arguments: &serde_json::Value) -> Result
     let updated = bw.vault().ciphers().edit(request).await.map_err(|error| error.to_string())?;
     let mut value = serde_json::to_value(&updated).unwrap();
     promote_login(&mut value);
+    redact(&mut value);
 
-    if generate {
-        redact_password(&mut value);
+    if let Some(password) = password {
+        value["login"]["password"] = serde_json::Value::String(password.to_string());
+    }
+    if let Some(totp) = totp {
+        value["login"]["totp"] = serde_json::Value::String(totp.to_string());
     }
 
     Ok(value.to_string())

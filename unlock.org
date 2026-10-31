@@ -5,7 +5,9 @@
 жодного звернення до ~identity~-ендпоінту, тож структурно імунно до
 ~LOGIN_RATELIMIT_MAX_BURST~/~SECONDS~ — саме це й усуває клас помилки ~429~, на яку натикались повторні
 ~/mcp reconnect~. Той самий рецепт, що й ~bwm-bwx~
-([[file:/home/eugine/job/personal/bw-mcp/code/bwm-bwx/unlock.org][unlock.org]]).
+([[file:/home/eugine/job/personal/bw-mcp/code/bwm-bwx/unlock.org][unlock.org]]). Клієнт тут будується через ~client::load()~ (не ~client::build()~) — лише ~load_from_state~
+викликає ~init_user_id~, без якого ~CiphersClient::edit()~/~create()~ падають з
+~NotAuthenticatedError~ (перевірено наживо, [[file:main-client.org][main-client.org]]).
 
 #+begin_src rust :noweb yes :tangle src/unlock.rs
   <<Декларації>>
@@ -25,7 +27,7 @@
 
 #+begin_src rust :noweb-ref Визначення
   pub async fn unlock(server: &str) -> Result<client::Bw, String> {
-      let bw = client::build(server).await?;
+      let bw = client::load(server).await?;
       let session_key = state::load_session_key(server)?;
 
       bw.unlock()

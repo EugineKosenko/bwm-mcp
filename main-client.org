@@ -40,6 +40,8 @@ Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ д�
 #+end_src
 
 #+begin_src rust :noweb-ref Визначення
+  const CLIENT_VERSION: &str = "2026.6.0";
+
   pub fn urls(server: &str) -> BaseUrls {
       BaseUrls { identity_url: format!("{}/identity", server), api_url: format!("{}/api", server) }
   }
@@ -50,7 +52,7 @@ Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ д�
       ClientSettings {
           identity_url,
           api_url,
-          bitwarden_client_version: Some("2026.6.0".to_string()),
+          bitwarden_client_version: Some(CLIENT_VERSION.to_string()),
           ..Default::default()
       }
   }
@@ -60,6 +62,30 @@ Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ д�
 ~Bitwarden-Client-Version~. =Vaultwarden= (гіпотеза, перевіряється) не віддає в ~/sync~ нові типи
 елементів клієнтам без версії чи зі старою — так зникали елементи типу ~5~ (=ssh key=), які бачить ~bw~.
 Тому вказуємо сучасну версію, ту саму, що сервер повідомляє в ~/api/config~ (~2026.6.0~).
+
+* Платформа (глобальна, один раз)
+
+~Client::load_from_state~ (нижче) внутрішньо читає ~get_host_platform_info()~ — глобальний
+~OnceLock~, що ПАНІКУЄ, якщо його не ініціалізовано заздалегідь ~init_host_platform_info~
+(перевірено ~cargo doc~/читанням коду форку, ~client_settings.rs~). На відміну від ~build()~
+(де версію клієнта задає сама ~settings()~), шлях ~load()~ бере її звідси — тож значення мають
+збігатися (~CLIENT_VERSION~ один на обидва).
+
+#+begin_src rust :noweb-ref Декларації
+  use bitwarden_core::{init_host_platform_info, DeviceType, HostPlatformInfo};
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  pub fn init_platform() {
+      init_host_platform_info(HostPlatformInfo {
+          user_agent: "Bitwarden Rust-SDK".to_string(),
+          device_type: DeviceType::SDK,
+          device_identifier: None,
+          bitwarden_client_version: Some(CLIENT_VERSION.to_string()),
+          bitwarden_package_type: None,
+      });
+  }
+#+end_src
 
 * Побудова клієнта
 
@@ -86,6 +112,26 @@ Vaultwarden додає стандартні шляхи ~/api~ і ~/identity~ д�
           .with_settings(settings(server))
           .with_state(registry)
           .build())
+  }
+#+end_src
+
+Для вже залогіненого сервера (шлях ~unlock~, не ~login~) — ~Client::load_from_state~, не ~build()~:
+перевірено наживо (помилка ~NotAuthenticatedError~ / "The client is not authenticated or the session
+has expired" з ~CiphersClient::edit()~/~create()~ — обидва читають
+~Client::internal::get_user_id()~) — ~build()~ узагалі не викликає ~init_user_id~, бо його викликає
+лише патч форку всередині ~login_password()~ (див. [[file:config.org][~config.org~]]), а шлях ~unlock()~
+([[file:unlock.org][unlock.org]]) мережевого ~login_password~ не робить. ~load_from_state~ сам читає ~USER_ID~/~BASE_URLS~
+зі стану (вже збережені [[file:state.org][~state.org~]] при ~login~) і викликає ~init_user_id~ — саме для цього він і
+існує (перевірено читанням ~rehydration.rs~ форку, той самий виклик у власних тестах
+~unlock_client.rs~).
+
+#+begin_src rust :noweb-ref Визначення
+  pub async fn load(server: &str) -> Result<Bw, String> {
+      let registry: StateRegistry = state::registry(server).await?;
+
+      Client::load_from_state(Arc::new(PasswordManagerTokenHandler::default()), registry)
+          .await
+          .map_err(|error| format!("не вдалося відновити клієнт зі збереженого стану: {error}"))
   }
 #+end_src
 

@@ -2,6 +2,7 @@ use bitwarden_core::Client;
 use bitwarden_core::client::persisted_state::BaseUrls;
 use bitwarden_core::ClientSettings;
 use std::env;
+use bitwarden_core::{init_host_platform_info, DeviceType, HostPlatformInfo};
 use bitwarden_auth::token_management::PasswordManagerTokenHandler;
 use bitwarden_core::ClientBuilder;
 use bitwarden_state::registry::StateRegistry;
@@ -14,6 +15,8 @@ use bitwarden_vault::{CipherSyncHandler, FolderSyncHandler};
 use crate::unlock;
 
 pub type Bw = Client;
+const CLIENT_VERSION: &str = "2026.6.0";
+
 pub fn urls(server: &str) -> BaseUrls {
     BaseUrls { identity_url: format!("{}/identity", server), api_url: format!("{}/api", server) }
 }
@@ -24,9 +27,18 @@ fn settings(server: &str) -> ClientSettings {
     ClientSettings {
         identity_url,
         api_url,
-        bitwarden_client_version: Some("2026.6.0".to_string()),
+        bitwarden_client_version: Some(CLIENT_VERSION.to_string()),
         ..Default::default()
     }
+}
+pub fn init_platform() {
+    init_host_platform_info(HostPlatformInfo {
+        user_agent: "Bitwarden Rust-SDK".to_string(),
+        device_type: DeviceType::SDK,
+        device_identifier: None,
+        bitwarden_client_version: Some(CLIENT_VERSION.to_string()),
+        bitwarden_package_type: None,
+    });
 }
 pub async fn build(server: &str) -> Result<Bw, String> {
     let registry: StateRegistry = state::registry(server).await?;
@@ -36,6 +48,13 @@ pub async fn build(server: &str) -> Result<Bw, String> {
         .with_settings(settings(server))
         .with_state(registry)
         .build())
+}
+pub async fn load(server: &str) -> Result<Bw, String> {
+    let registry: StateRegistry = state::registry(server).await?;
+
+    Client::load_from_state(Arc::new(PasswordManagerTokenHandler::default()), registry)
+        .await
+        .map_err(|error| format!("не вдалося відновити клієнт зі збереженого стану: {error}"))
 }
 pub fn describe(error: &(dyn StdError + 'static)) -> String {
     let mut message = error.to_string();

@@ -402,6 +402,13 @@
 явним значенням: генератора =totp=-секрету в =SDK= немає (див. [[file:config.org][~config.org~]]), тож
 "~generateTotp~" поки неможливий.
 
+Відповідь завжди проходить повний ~redact()~ (не вузький "приховати лише нове значення") — інакше
+~passwordHistory[]~ (SDK додає туди попередній пароль картки при кожній зміні) витікав би відкритим
+текстом, навіть коли нове значення ховалось: перевірено наживо, знайдено по факту витоку (не
+наперед). ~redact()~ і так рекурсивний і прибирає ~password~ з будь-якого вкладеного обʼєкта, включно
+з елементами ~passwordHistory~. Явно передані ~secret.password~/~secret.totp~ після цього повертаємо в
+~login~ назад — те саме значення, що покликач щойно дав, ховати нема сенсу.
+
 #+begin_src rust :noweb-ref Декларації
   fn password_request(options: &serde_json::Value) -> PasswordGeneratorRequest {
       PasswordGeneratorRequest {
@@ -411,12 +418,6 @@
           special: options["special"].as_bool().unwrap_or(false),
           length: options["length"].as_u64().unwrap_or(20) as u8,
           ..Default::default()
-      }
-  }
-
-  fn redact_password(value: &mut serde_json::Value) {
-      if let Some(login) = value.get_mut("login").and_then(|login| login.as_object_mut()) {
-          login.remove("password");
       }
   }
 #+end_src
@@ -465,9 +466,13 @@
       let updated = bw.vault().ciphers().edit(request).await.map_err(|error| error.to_string())?;
       let mut value = serde_json::to_value(&updated).unwrap();
       promote_login(&mut value);
+      redact(&mut value);
 
-      if generate {
-          redact_password(&mut value);
+      if let Some(password) = password {
+          value["login"]["password"] = serde_json::Value::String(password.to_string());
+      }
+      if let Some(totp) = totp {
+          value["login"]["totp"] = serde_json::Value::String(totp.to_string());
       }
 
       Ok(value.to_string())

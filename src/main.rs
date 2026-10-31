@@ -90,6 +90,7 @@ async fn main() {
         .with_max_level(tracing_subscriber::filter::LevelFilter::ERROR)
         .init();
     dotenvy::dotenv().ok();
+    client::init_platform();
 
     if std::env::args().nth(1).as_deref() == Some("login") {
         let server = require_url("login");
